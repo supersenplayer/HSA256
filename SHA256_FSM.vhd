@@ -167,7 +167,7 @@ begin
 
     -- round constant
     -- use counter_prev (1 cycle behind) to match when W[N] becomes visible on wt
-    -- round N fires at edge N+1: wt=W[N], kt=K[N] (counter_prev = N) ✓
+    -- round N fires at edge N+1: wt=W[N], kt=K[N] (counter_prev = N)
     kt <= K_cons(counter_prev)
           when (state = LOAD or state = COMPUTE)
           else (others => '0');

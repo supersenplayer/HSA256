@@ -22,7 +22,7 @@ begin
     process(clk)
     begin
         if rising_edge(clk) then
-            -- synchronous read : 1-cycle latency (addr in → data next clock)
+            -- synchronous read : 1-cycle latency (addr in -> data next clock)
             rd_data <= mem(to_integer(unsigned(rd_addr(13 downto 2))));
             -- synchronous write
             if wr_en = '1' then
