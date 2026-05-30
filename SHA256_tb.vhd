@@ -21,6 +21,20 @@ end entity;
 
 architecture sim of SHA256_tb is
 
+    -- Helper: convert a 32-bit word to an 8-character hex string.
+    -- Works with VHDL-93/2002 (no to_hstring dependency).
+    function word_to_hex(v : std_logic_vector(31 downto 0)) return string is
+        constant HEX_CHARS : string(1 to 16) := "0123456789ABCDEF";
+        variable result    : string(1 to 8);
+        variable nibble    : integer;
+    begin
+        for i in 0 to 7 loop
+            nibble := to_integer(unsigned(v(31 - i*4 downto 28 - i*4)));
+            result(i + 1) := HEX_CHARS(nibble + 1);
+        end loop;
+        return result;
+    end function;
+
     constant T : time := 10 ns;
 
     signal clk   : std_logic := '0';
@@ -152,12 +166,12 @@ begin
                 if captured(i) /= expected(i) then
                     fail_cnt <= fail_cnt + 1;
                     report "  H" & integer'image(i) &
-                           " MISMATCH  got=" & to_hstring(captured(i)) &
-                           "  exp=" & to_hstring(expected(i))
+                           " MISMATCH  got=" & word_to_hex(captured(i)) &
+                           "  exp=" & word_to_hex(expected(i))
                            severity error;
                 else
                     report "  H" & integer'image(i) & " ok  " &
-                           to_hstring(captured(i));
+                           word_to_hex(captured(i));
                 end if;
             end loop;
 
