@@ -31,11 +31,12 @@ end entity;
 
 architecture rtl of SHA256_FSM is
 
-    type state_t is (IDLE, FETCH, LOAD, COMPUTE, WRITEBACK);
+    type state_t is (IDLE, FETCH, LOAD, COMPUTE, ACCUM, WRITEBACK);
     signal state : state_t := IDLE;
 
     -- counter  : drives scheduler slot index and memory address
-    -- counter goes 0..15 in LOAD, 16..64 in COMPUTE (64 is drain cycle for round 63)
+    -- counter goes 0..15 in LOAD, 16..64 in COMPUTE; round 63 fires at 64,
+    -- then one ACCUM cycle finalises H_result before WRITEBACK.
     signal counter      : integer range 0 to 64 := 0;
     -- counter_prev : 1-cycle delayed counter, used for kt
     -- because scheduler output W[N] becomes valid 1 cycle AFTER loading
@@ -71,28 +72,34 @@ begin
             case state is
 
                 when IDLE =>
-                    -- keep addr at 0x0000 so memory pre-fetches the length word
-                    addr_reg <= x"0000";
-                    counter  <= 0;
+                    counter <= 0;
                     if start = '1' then
-                        state <= FETCH;
+                        -- BUGFIX(addr pipeline): drive 0x0004 during the upcoming
+                        -- FETCH cycle so that mem[1]=W[0] is the value returned at
+                        -- LOAD counter=0. (length word mem[0] is already in flight.)
+                        addr_reg <= x"0004";
+                        state    <= FETCH;
+                    else
+                        -- keep addr at 0x0000 so memory pre-fetches the length word
+                        addr_reg <= x"0000";
                     end if;
 
                 when FETCH =>
                     -- mem_data = memory[0x0000] = length in bits
-                    -- (IDLE held addr=0x0000 for ≥1 cycle, memory answered)
+                    -- (IDLE held addr=0x0000 for >=1 cycle, memory answered)
                     msg_len_bits  <= mem_data;
                     msg_len_words <= (to_integer(unsigned(mem_data(8 downto 0))) + 31) / 32;
-                    -- pre-fetch W[0] so it is ready at LOAD counter=0
-                    addr_reg <= x"0004";
+                    -- W[0] (mem[1] @ 0x0004) is already in flight from IDLE.
+                    -- Queue W[1] (mem[2] @ 0x0008) so it is ready at LOAD counter=1.
+                    addr_reg <= x"0008";
                     counter  <= 0;
                     state    <= LOAD;
 
                 when LOAD =>
-                    -- pipeline: put address for word (counter+1) now
-                    -- so mem_data at next edge = word (counter+1)
+                    -- pipeline: queue the data word two counts ahead so that
+                    -- mem_data at LOAD counter=N equals W[N] = mem[N+1].
                     addr_reg <= std_logic_vector(
-                        to_unsigned(16#0004# + (counter + 1) * 4, 16));
+                        to_unsigned(16#0004# + (counter + 2) * 4, 16));
                     if counter = 15 then
                         state   <= COMPUTE;
                         counter <= 16;
@@ -101,14 +108,22 @@ begin
                     end if;
 
                 when COMPUTE =>
-                    -- extra cycle at 64 drains round 63 through the pipeline
+                    -- round 63 fires at counter=64; move to ACCUM so the Core has
+                    -- one full cycle to add the working vars into H_result before
+                    -- the writeback reads H_result.
                     if counter = 64 then
                         cdone_i <= '1';
-                        state   <= WRITEBACK;
-                        wb_cnt  <= 0;
+                        state   <= ACCUM;
                     else
                         counter <= counter + 1;
                     end if;
+
+                when ACCUM =>
+                    -- compute_done is high this cycle (cdone_i was set in COMPUTE),
+                    -- so the Core latches H_result = H_init + working vars at the
+                    -- end of this cycle. Then start the writeback.
+                    wb_cnt <= 0;
+                    state  <= WRITEBACK;
 
                 when WRITEBACK =>
                     if wb_cnt = 7 then
