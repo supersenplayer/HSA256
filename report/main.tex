@@ -1,5 +1,5 @@
 % =============================================================================
-% Rapport de Projet : Co-processeur SHA-256 en VHDL
+% Rapport de Projet : Acc\'{e}l\'{e}rateur Mat\'{e}riel SHA-256 en VHDL
 % =============================================================================
 \documentclass[12pt,a4paper]{article}
 
@@ -22,56 +22,80 @@
 \usepackage{float}
 \usepackage{enumitem}
 \usepackage{array}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% --- Page style ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize Acc\'{e}l\'{e}rateur SHA-256 -- DIMRI Imad}
+\fancyhead[R]{\footnotesize \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% --- Section formatting ---
+\titleformat{\section}{\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{1em}{}
 
 % --- Code listing style ---
-\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codebg}{RGB}{248,248,248}
 \definecolor{codegreen}{RGB}{0,128,0}
 \definecolor{codegray}{RGB}{100,100,100}
-\definecolor{codeblue}{RGB}{0,0,180}
+\definecolor{codeblue}{RGB}{0,0,160}
+\definecolor{codered}{RGB}{160,0,0}
 \lstdefinestyle{vhdlstyle}{
     language=VHDL,
     backgroundcolor=\color{codebg},
-    basicstyle=\ttfamily\footnotesize,
+    basicstyle=\ttfamily\scriptsize,
     keywordstyle=\color{codeblue}\bfseries,
     commentstyle=\color{codegreen}\itshape,
-    stringstyle=\color{codegray},
+    stringstyle=\color{codered},
     numbers=left,
     numberstyle=\tiny\color{codegray},
     numbersep=5pt,
     frame=single,
     breaklines=true,
     captionpos=b,
-    tabsize=4
+    tabsize=4,
+    xleftmargin=1em,
+    framexleftmargin=1em
 }
 \lstset{style=vhdlstyle}
 
 % --- Title ---
-\title{\textbf{Conception et Validation d'un Co-processeur\\
-d'Acc\'{e}l\'{e}ration SHA-256 en VHDL}\\[0.5em]
-\large Acc\'{e}l\'{e}ration mat\'{e}rielle de la fonction de hachage cryptographique\\
-pour syst\`{e}mes embarqu\'{e}s sur FPGA}
-\author{DIMRI Imad}
+\title{%
+\vspace{-1cm}
+\rule{\textwidth}{1.5pt}\\[0.4cm]
+{\Huge\bfseries Conception et Validation d'un\\Acc\'{e}l\'{e}rateur Mat\'{e}riel SHA-256}\\[0.3cm]
+{\Large Co-processeur cryptographique synth\'{e}tisable sur FPGA\\
+avec support multi-blocs}\\[0.2cm]
+\rule{\textwidth}{1.5pt}
+}
+\author{%
+\textbf{DIMRI Imad}\\[0.2cm]
+\small Projet de conception num\'{e}rique
+}
 \date{Mai 2026}
 
 \begin{document}
 \maketitle
+\thispagestyle{empty}
 
 \begin{abstract}
+\noindent
 Ce rapport pr\'{e}sente la conception, l'impl\'{e}mentation et la v\'{e}rification
 fonctionnelle d'un \textbf{acc\'{e}l\'{e}rateur mat\'{e}riel} d\'{e}di\'{e} au calcul de la
-fonction de hachage SHA-256, d\'{e}crit en VHDL et valid\'{e} sous Vivado XSim
-(Xilinx) et GHDL. Le co-processeur supporte le hachage de messages de longueur
-arbitraire (multi-blocs) et est con\c{c}u pour \^{e}tre int\'{e}gr\'{e} en tant que
-p\'{e}riph\'{e}rique mapp\'{e} en m\'{e}moire dans un syst\`{e}me sur puce (SoC).
-
-Nous d\'{e}montrons que l'impl\'{e}mentation mat\'{e}rielle offre un gain de
-performance de \textbf{50 \`{a} 200$\times$} par rapport \`{a} une ex\'{e}cution logicielle
-sur un processeur embarqu\'{e} typique (ARM Cortex-M4), justifiant le terme
-\og acc\'{e}l\'{e}rateur \fg{}. Les r\'{e}sultats de simulation confirment la conformit\'{e}
-fonctionnelle avec les vecteurs de test officiels NIST, incluant le cas
-multi-blocs.
+fonction de hachage cryptographique SHA-256. Impl\'{e}ment\'{e} en VHDL et valid\'{e}
+sous Vivado XSim (AMD/Xilinx), le co-processeur supporte le hachage de
+messages de longueur arbitraire via un traitement multi-blocs. L'architecture
+it\'{e}rative \`{a} une ronde par cycle d'horloge permet d'atteindre un d\'{e}bit
+th\'{e}orique de \textbf{602 Mbit/s} \`{a} 100 MHz, soit un gain de performance de
+\textbf{24\`{a} 48 fois} par rapport \`{a} une ex\'{e}cution logicielle sur processeur
+embarqu\'{e}. La conformit\'{e} fonctionnelle est d\'{e}montr\'{e}e par simulation avec les
+vecteurs de test officiels NIST, incluant un message n\'{e}cessitant deux blocs
+de 512 bits.
 \end{abstract}
 
+\vspace{0.5cm}
 \tableofcontents
 \newpage
 
@@ -83,120 +107,124 @@ multi-blocs.
 
 \subsection{Contexte et motivation}
 
-Les fonctions de hachage cryptographique, et en particulier SHA-256 (\emph{Secure
-Hash Algorithm}, 256 bits), sont omnipr\'{e}sentes dans les syst\`{e}mes num\'{e}riques
-modernes : signature \'{e}lectronique, v\'{e}rification d'int\'{e}grit\'{e}, protocoles
-blockchain, authentification TLS, et s\'{e}curit\'{e} IoT. Chaque calcul SHA-256
-n\'{e}cessite 64 rondes d'op\'{e}rations arithm\'{e}tiques et logiques sur des mots de
-32 bits, ce qui repr\'{e}sente une charge significative pour un processeur
-g\'{e}n\'{e}raliste.
+Les fonctions de hachage cryptographique sont au c\oe{}ur de la s\'{e}curit\'{e}
+num\'{e}rique moderne. SHA-256 (\emph{Secure Hash Algorithm}, 256 bits), d\'{e}fini
+par la norme FIPS 180-4 du NIST~\cite{fips180}, est utilis\'{e} dans :
+\begin{itemize}[leftmargin=*]
+    \item La \textbf{signature \'{e}lectronique} (certificats X.509, TLS/SSL) ;
+    \item La \textbf{v\'{e}rification d'int\'{e}grit\'{e}} (checksums, mises \`{a} jour firmware) ;
+    \item Les \textbf{protocoles blockchain} (Bitcoin, Ethereum PoW) ;
+    \item L'\textbf{authentification} (HMAC-SHA256, d\'{e}rivation de cl\'{e}s).
+\end{itemize}
 
-\subsection{Pourquoi parler d'\og acc\'{e}l\'{e}rateur \fg{} ?}
-\label{sec:why_accel}
-
-Le terme \textbf{acc\'{e}l\'{e}rateur} (\emph{hardware accelerator}) d\'{e}signe un
-circuit sp\'{e}cialis\'{e} qui ex\'{e}cute une fonction donn\'{e}e significativement plus
-vite (ou avec moins d'\'{e}nergie) qu'un processeur g\'{e}n\'{e}raliste ex\'{e}cutant le
-m\^{e}me algorithme en logiciel. Trois facteurs justifient cette appellation pour
-notre co-processeur :
-
-\begin{enumerate}[leftmargin=*]
-\item \textbf{Parall\'{e}lisme architectural} --- Le processeur g\'{e}n\'{e}raliste
-    ex\'{e}cute les op\'{e}rations s\'{e}quentiellement (une instruction par cycle dans le
-    meilleur cas). Notre circuit calcule \emph{simultan\'{e}ment} $\Sigma_1(e)$,
-    $Ch(e,f,g)$, $\Sigma_0(a)$, $Maj(a,b,c)$ et l'expansion $W_t$ en un
-    \textbf{seul cycle d'horloge}, gr\^{a}ce \`{a} des chemins combinatoires
-    parall\`{e}les d\'{e}di\'{e}s (cf.\ figure~\ref{fig:round_datapath}).
-
-\item \textbf{R\'{e}duction du nombre de cycles} --- En logiciel sur un ARM
-    Cortex-M4 (pas d'extension crypto), une ronde SHA-256 n\'{e}cessite environ
-    50--70 instructions. Pour 64 rondes, cela repr\'{e}sente $\sim$3500 cycles par
-    bloc. Notre acc\'{e}l\'{e}rateur ex\'{e}cute un bloc complet en \textbf{$\sim$85 cycles}
-    ($\sim$41$\times$ moins).
-
-\item \textbf{D\'{e}chargement du CPU} --- Pendant que le co-processeur hache, le
-    processeur h\^{o}te est libre pour d'autres t\^{a}ches (traitement r\'{e}seau,
-    interface utilisateur), am\'{e}liorant le d\'{e}bit global du syst\`{e}me.
-\end{enumerate}
-
-Le tableau~\ref{tab:accel_comparison} quantifie le gain de performance.
-
-\begin{table}[H]
-\centering
-\caption{Comparaison de performance : logiciel vs.\ acc\'{e}l\'{e}rateur mat\'{e}riel}
-\label{tab:accel_comparison}
-\begin{tabular}{l r r r}
-\toprule
-\textbf{Plateforme} & \textbf{Cycles/bloc} & \textbf{Freq.} & \textbf{D\'{e}bit} \\
-\midrule
-ARM Cortex-M4 (logiciel)     & $\sim$3\,500 & 168 MHz & $\sim$25 Mbit/s \\
-Intel Core i7 (logiciel, AVX) & $\sim$1\,000 & 4 GHz   & $\sim$2 Gbit/s \\
-\textbf{Notre acc\'{e}l\'{e}rateur (FPGA)} & \textbf{85}  & 100 MHz & \textbf{602 Mbit/s} \\
-Notre acc\'{e}l\'{e}rateur (si 200 MHz) & 85           & 200 MHz & 1\,204 Mbit/s \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\`{A} 100 MHz, notre acc\'{e}l\'{e}rateur atteint un d\'{e}bit 24$\times$ sup\'{e}rieur \`{a} un
-Cortex-M4 \`{a} 168 MHz. Sur une cible FPGA \`{a} 200 MHz (r\'{e}aliste sur Xilinx
-Artix-7), le facteur d'acc\'{e}l\'{e}ration atteint \textbf{48$\times$}.
+Sur un processeur embarqu\'{e} (ARM Cortex-M4 par exemple), le calcul de SHA-256
+n\'{e}cessite environ 3\,500 cycles par bloc de 512 bits, ce qui constitue un
+goulot d'\'{e}tranglement pour les applications \`{a} haut d\'{e}bit. Un
+\textbf{acc\'{e}l\'{e}rateur mat\'{e}riel} d\'{e}di\'{e} permet de r\'{e}duire ce co\^{u}t \`{a}
+$\sim$85 cycles par bloc, soit un gain de plus de 40 fois.
 
 \subsection{Objectifs du projet}
 
 \begin{enumerate}
-    \item Impl\'{e}menter SHA-256 conform\'{e}ment \`{a} FIPS 180-4~\cite{fips180} ;
+    \item Impl\'{e}menter l'algorithme SHA-256 conform\'{e}ment \`{a} FIPS 180-4 ;
     \item Supporter les messages de longueur arbitraire (multi-blocs) ;
-    \item Adopter une architecture modulaire et synth\'{e}tisable sur FPGA ;
-    \item Valider par simulation avec les vecteurs NIST ;
-    \item Documenter les choix et les r\'{e}sultats.
+    \item Adopter une architecture modulaire, synth\'{e}tisable sur FPGA ;
+    \item Valider par simulation avec les vecteurs de test NIST ;
+    \item Analyser les performances et justifier le terme \og acc\'{e}l\'{e}rateur \fg{}.
 \end{enumerate}
 
 \subsection{Organisation du rapport}
 
-La section~\ref{sec:algo} rappelle l'algorithme SHA-256.
-La section~\ref{sec:archi} d\'{e}taille l'architecture mat\'{e}rielle.
-La section~\ref{sec:impl} pr\'{e}sente les modules VHDL.
-La section~\ref{sec:verif} d\'{e}crit la v\'{e}rification et les r\'{e}sultats.
-La section~\ref{sec:optim} analyse les optimisations de performance.
-La section~\ref{sec:bugs} documente les probl\`{e}mes rencontr\'{e}s.
-La section~\ref{sec:conclu} conclut.
-
+\begin{itemize}
+    \item Section~\ref{sec:algo} : rappel de l'algorithme SHA-256 ;
+    \item Section~\ref{sec:archi} : architecture mat\'{e}rielle du co-processeur ;
+    \item Section~\ref{sec:impl} : impl\'{e}mentation VHDL module par module ;
+    \item Section~\ref{sec:verif} : v\'{e}rification fonctionnelle et r\'{e}sultats ;
+    \item Section~\ref{sec:accel} : analyse de performance et justification du terme acc\'{e}l\'{e}rateur ;
+    \item Section~\ref{sec:bugs} : probl\`{e}mes rencontr\'{e}s et corrections ;
+    \item Section~\ref{sec:conclu} : conclusion et perspectives.
+\end{itemize}
 
 % =============================================================================
 \section{Algorithme SHA-256}
 \label{sec:algo}
 % =============================================================================
 
-\subsection{Principe g\'{e}n\'{e}ral}
+\subsection{Vue d'ensemble}
 
-SHA-256 op\`{e}re sur des blocs de 512 bits et produit un condens\'{e} de 256 bits.
-Le traitement comporte trois phases :
+SHA-256 transforme un message de longueur arbitraire en un condens\'{e} fixe de
+256 bits (32 octets). Le traitement se d\'{e}compose en trois phases principales,
+illustr\'{e}es par la figure~\ref{fig:algo_overview}.
 
+\begin{figure}[H]
+\centering
+% =====================================================================
+% IMAGE PLACEHOLDER: Vue d'ensemble de l'algorithme SHA-256
+% Ins\'{e}rer ici un sch\'{e}ma montrant les 3 phases :
+%   1. Padding du message
+%   2. D\'{e}coupage en blocs de 512 bits
+%   3. Compression it\'{e}rative (64 rondes par bloc)
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}
+\textbf{[IMAGE : Vue d'ensemble de l'algorithme SHA-256]}\\[0.3cm]
+\small Sch\'{e}ma montrant : Message $\rightarrow$ Padding $\rightarrow$
+Blocs 512 bits $\rightarrow$ 64 rondes de compression $\rightarrow$ Digest 256 bits
+\vspace{3cm}}}
+\caption{Vue d'ensemble du traitement SHA-256}
+\label{fig:algo_overview}
+\end{figure}
+
+\subsection{Phase 1 : Pr\'{e}-traitement (Padding)}
+
+Le message est compl\'{e}t\'{e} pour que sa longueur soit un multiple de 512 bits :
 \begin{enumerate}
-    \item \textbf{Pr\'{e}-traitement (padding)} : ajout du bit '1', de z\'{e}ros, et
-          de la longueur du message sur 64 bits pour obtenir un multiple de
-          512 bits.
-    \item \textbf{Expansion du message} : g\'{e}n\'{e}ration de 64 mots de 32 bits
-          ($W_0 \ldots W_{63}$) \`{a} partir des 16 mots d'entr\'{e}e.
-    \item \textbf{Compression} : 64 rondes it\'{e}ratives mettant \`{a} jour huit
-          variables de travail ($a \ldots h$).
+    \item Ajout d'un bit \texttt{'1'} imm\'{e}diatement apr\`{e}s le message ;
+    \item Ajout de bits \texttt{'0'} jusqu'\`{a} ce que la longueur soit
+          congrue \`{a} 448 modulo 512 ;
+    \item Ajout de la longueur originale du message sur 64 bits (big-endian).
 \end{enumerate}
 
-Pour un message multi-blocs, les \'{e}tapes 2 et 3 sont r\'{e}p\'{e}t\'{e}es pour chaque
-bloc, et le condens\'{e} interm\'{e}diaire ($H^{(i)}$) est accumul\'{e} :
-\[
-H^{(i)} = H^{(i-1)} + (a, b, \ldots, h)_{\text{final du bloc } i}
-\]
+\textbf{Exemple} : pour le message \texttt{"abc"} (24 bits) :
+\begin{verbatim}
+    61626380 00000000 00000000 00000000
+    00000000 00000000 00000000 00000000
+    00000000 00000000 00000000 00000000
+    00000000 00000000 00000000 00000018
+\end{verbatim}
+Le r\'{e}sultat est un bloc unique de 512 bits (16 mots de 32 bits).
 
-\subsection{Fonctions logiques}
+\subsection{Phase 2 : Expansion du message}
+
+Les 16 mots d'entr\'{e}e ($W_0 \ldots W_{15}$) sont \'{e}tendus en 64 mots par la
+r\'{e}currence :
+\begin{equation}
+W_t = \sigma_1(W_{t-2}) + W_{t-7} + \sigma_0(W_{t-15}) + W_{t-16}
+\quad \text{pour } 16 \leq t \leq 63
+\label{eq:expansion}
+\end{equation}
+
+\subsection{Phase 3 : Compression (64 rondes)}
+
+Chaque ronde $t$ calcule deux valeurs temporaires (tableau~\ref{tab:fonctions}) :
+\begin{align}
+T_1 &= h + \Sigma_1(e) + Ch(e,f,g) + K_t + W_t \label{eq:t1}\\
+T_2 &= \Sigma_0(a) + Maj(a,b,c) \label{eq:t2}
+\end{align}
+
+Puis les huit variables de travail sont mises \`{a} jour :
+\[
+h \leftarrow g,\quad g \leftarrow f,\quad f \leftarrow e,\quad
+e \leftarrow d + T_1,\quad d \leftarrow c,\quad c \leftarrow b,\quad
+b \leftarrow a,\quad a \leftarrow T_1 + T_2
+\]
 
 \begin{table}[H]
 \centering
-\caption{Fonctions logiques de SHA-256 (op\'{e}rations sur 32 bits)}
+\caption{Fonctions logiques utilis\'{e}es dans SHA-256}
 \label{tab:fonctions}
 \begin{tabular}{ll}
 \toprule
-\textbf{Fonction} & \textbf{D\'{e}finition} \\
+\textbf{Fonction} & \textbf{D\'{e}finition (op\'{e}rations sur 32 bits)} \\
 \midrule
 $Ch(x,y,z)$        & $(x \wedge y) \oplus (\neg x \wedge z)$ \\
 $Maj(x,y,z)$       & $(x \wedge y) \oplus (x \wedge z) \oplus (y \wedge z)$ \\
@@ -208,24 +236,14 @@ $\sigma_1(x)$      & $ROTR^{17}(x) \oplus ROTR^{19}(x) \oplus SHR^{10}(x)$ \\
 \end{tabular}
 \end{table}
 
-\subsection{Sch\'{e}ma d'une ronde}
+\subsection{Accumulation multi-blocs}
 
-Chaque ronde $t$ ($0 \leq t \leq 63$) calcule :
-\begin{align}
-T_1 &= h + \Sigma_1(e) + Ch(e,f,g) + K_t + W_t \label{eq:t1}\\
-T_2 &= \Sigma_0(a) + Maj(a,b,c) \label{eq:t2}
-\end{align}
-Puis : $h \leftarrow g$,\ $g \leftarrow f$,\ $f \leftarrow e$,\
-$e \leftarrow d + T_1$,\ $d \leftarrow c$,\ $c \leftarrow b$,\
-$b \leftarrow a$,\ $a \leftarrow T_1 + T_2$.
-
-\subsection{Expansion du message}
-
-Pour $t \geq 16$ :
-\begin{equation}
-W_t = \sigma_1(W_{t-2}) + W_{t-7} + \sigma_0(W_{t-15}) + W_{t-16}
-\label{eq:expansion}
-\end{equation}
+Pour un message compos\'{e} de $N$ blocs, le condens\'{e} interm\'{e}diaire est accumul\'{e}
+apr\`{e}s chaque bloc :
+\[
+H^{(i)}_j = H^{(i-1)}_j + \text{variable}_j \quad \text{pour } j = 0 \ldots 7
+\]
+avec $H^{(0)} = H_{init}$ (les huit constantes d'initialisation).
 
 
 % =============================================================================
@@ -233,75 +251,80 @@ W_t = \sigma_1(W_{t-2}) + W_{t-7} + \sigma_0(W_{t-15}) + W_{t-16}
 \label{sec:archi}
 % =============================================================================
 
-\subsection{Choix architectural : it\'{e}ratif \`{a} une ronde par cycle}
+\subsection{Choix architectural}
 
-L'architecture adopt\'{e}e est de type \emph{it\'{e}rative} : une seule instance du
-circuit de ronde est instanci\'{e}e et r\'{e}utilis\'{e}e 64 fois (une ronde par cycle
-d'horloge). Ce choix offre le meilleur compromis :
+L'architecture adopt\'{e}e est de type \textbf{it\'{e}rative} : une seule instance
+du circuit de ronde est instanci\'{e}e et r\'{e}utilis\'{e}e 64 fois. Ce choix offre
+le meilleur compromis entre surface et d\'{e}bit pour un co-processeur embarqu\'{e} :
+
 \begin{itemize}
-    \item \textbf{Surface mod\'{e}r\'{e}e} : un seul jeu d'additionneurs 32 bits ;
-    \item \textbf{D\'{e}bit \'{e}lev\'{e}} : 64 cycles par bloc + overhead
-          = $\sim$85 cycles/bloc ;
-    \item \textbf{Complexit\'{e} de contr\^{o}le limit\'{e}e} : une seule FSM lin\'{e}aire.
+    \item Surface mod\'{e}r\'{e}e (un seul jeu d'additionneurs 32 bits) ;
+    \item D\'{e}bit \'{e}lev\'{e} ($\sim$85 cycles/bloc = 602 Mbit/s \`{a} 100 MHz) ;
+    \item Complexit\'{e} de contr\^{o}le limit\'{e}e (une FSM lin\'{e}aire).
 \end{itemize}
 
-\subsection{Diagramme de blocs}
+\subsection{Diagramme de blocs global}
 
-La figure~\ref{fig:archi_globale} pr\'{e}sente l'architecture du syst\`{e}me complet.
+La figure~\ref{fig:block_diagram} pr\'{e}sente l'architecture compl\`{e}te du
+co-processeur avec ses interconnexions.
 
 \begin{figure}[H]
 \centering
-\begin{tikzpicture}[
-    block/.style={draw, rectangle, minimum width=2.6cm, minimum height=1.1cm,
-                  align=center, font=\footnotesize},
-    arrow/.style={-{Stealth[length=2mm]}, thick},
-    darrow/.style={{Stealth[length=2mm]}-{Stealth[length=2mm]}, thick},
-    node distance=1.4cm and 2.2cm
-]
-\node[block] (fsm)   {SHA256\_FSM\\(Contr\^{o}le)};
-\node[block, right=2.5cm of fsm] (sched) {Scheduler\\(Expansion $W$)};
-\node[block, below=1.8cm of sched] (round) {Round\\(Compression)};
-\node[block, below=1.8cm of fsm]  (regs)  {Registres\\$a \ldots h$ + $H$};
-\node[block, left=1.8cm of fsm]   (mem)   {M\'{e}moire\\partag\'{e}e};
-
-\draw[arrow] (fsm) -- node[above,font=\scriptsize]{ctrl, $K_t$} (sched);
-\draw[arrow] (sched) -- node[right,font=\scriptsize]{$W_t$} (round);
-\draw[arrow] (fsm) -- node[left,font=\scriptsize]{en, init} (regs);
-\draw[arrow] (round) -- node[below,font=\scriptsize]{$a'\ldots h'$} (regs);
-\draw[arrow] (regs.north east) -- node[right,font=\scriptsize,pos=0.3]{$a\ldots h$} (round.south west);
-\draw[darrow] (mem) -- node[above,font=\scriptsize]{addr/data} (fsm);
-
-\node[above=0.6cm of fsm, font=\scriptsize] (start_lbl) {start / done};
-\draw[arrow] (start_lbl) -- (fsm);
-\end{tikzpicture}
+% =====================================================================
+% IMAGE PLACEHOLDER: Diagramme de blocs du co-processeur
+% Ins\'{e}rer ici le diagramme montrant :
+%   - SHA256_FSM (contr\^{o}le) au centre
+%   - Scheduler (expansion W) \`{a} droite
+%   - Round (compression) en bas \`{a} droite
+%   - Registres a..h + H en bas
+%   - M\'{e}moire partag\'{e}e \`{a} gauche
+%   - Fl\`{e}ches montrant les signaux de contr\^{o}le et de donn\'{e}es
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}
+\textbf{[IMAGE : Diagramme de blocs du co-processeur SHA-256]}\\[0.3cm]
+\small Modules : FSM, Scheduler, Round, Registres (a..h + H), M\'{e}moire.\\
+Signaux : start/done, addr/data, $W_t$, $K_t$, round\_en, hash\_init, compute\_done.
+\vspace{4cm}}}
 \caption{Architecture globale du co-processeur SHA-256}
-\label{fig:archi_globale}
+\label{fig:block_diagram}
 \end{figure}
 
-\subsection{Modules VHDL}
+\subsection{Description des modules}
 
-Le tableau~\ref{tab:modules} r\'{e}sume chaque module.
+Le syst\`{e}me est d\'{e}compos\'{e} en six modules VHDL, r\'{e}sum\'{e}s dans le
+tableau~\ref{tab:modules}.
 
 \begin{table}[H]
 \centering
-\caption{Modules VHDL du co-processeur}
+\caption{Modules VHDL du co-processeur et leurs r\^{o}les}
 \label{tab:modules}
-\begin{tabular}{lp{8.5cm}}
+\begin{tabular}{lp{9cm}}
 \toprule
-\textbf{Fichier} & \textbf{R\^{o}le} \\
+\textbf{Module} & \textbf{R\^{o}le} \\
 \midrule
-\texttt{SHA256\_pkg.vhd}    & Types, constantes $K$, $H_{init}$, fonctions logiques. \\
-\texttt{Round.vhd}          & Circuit combinatoire d'une ronde (eq.~\ref{eq:t1}--\ref{eq:t2}). \\
-\texttt{Scheduler.vhd}      & Fen\^{e}tre glissante 16 mots, r\'{e}currence eq.~\ref{eq:expansion}. \\
-\texttt{SHA256\_FSM.vhd}    & FSM multi-blocs, pipeline d'adresses, s\'{e}lection $K_t$. \\
-\texttt{SHA256\_Core.vhd}   & Top datapath : Scheduler + Round + FSM + registres. \\
-\texttt{SHA256\_Memory.vhd} & RAM synchrone partag\'{e}e (16 Ko, 1 cycle latence). \\
-\texttt{SHA256\_tb.vhd}     & Banc de test auto-v\'{e}rifiant (3 vecteurs). \\
+\texttt{SHA256\_pkg}    & Package contenant les d\'{e}finitions de types (\texttt{word},
+                          tableaux), les 64 constantes $K_t$, les valeurs initiales
+                          $H_{init}$, et toutes les fonctions logiques. \\[4pt]
+\texttt{Round}          & Circuit \textbf{purement combinatoire} calculant une ronde
+                          de compression ($T_1$, $T_2$, nouvelles variables). \\[4pt]
+\texttt{Scheduler}      & Fen\^{e}tre glissante de 16 registres impl\'{e}mentant
+                          l'expansion du message (r\'{e}currence~\ref{eq:expansion}). \\[4pt]
+\texttt{SHA256\_FSM}    & Machine \`{a} \'{e}tats finis g\'{e}rant le s\'{e}quencement,
+                          le pipeline d'adresses m\'{e}moire, la s\'{e}lection de $K_t$,
+                          et la boucle multi-blocs. \\[4pt]
+\texttt{SHA256\_Core}   & Entit\'{e} de plus haut niveau : instancie les modules
+                          ci-dessus et contient les registres de travail $a \ldots h$
+                          et l'accumulateur $H$. \\[4pt]
+\texttt{SHA256\_Memory} & RAM synchrone \`{a} double port (16 Ko), latence de lecture
+                          d'un cycle d'horloge. \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Carte m\'{e}moire}
+
+L'interface entre le processeur h\^{o}te et le co-processeur utilise une m\'{e}moire
+partag\'{e}e dont l'organisation est d\'{e}crite dans le tableau~\ref{tab:memmap}.
 
 \begin{table}[H]
 \centering
@@ -309,59 +332,69 @@ Le tableau~\ref{tab:modules} r\'{e}sume chaque module.
 \label{tab:memmap}
 \begin{tabular}{lll}
 \toprule
-\textbf{Adresse} & \textbf{Taille} & \textbf{Contenu} \\
+\textbf{Adresse (octet)} & \textbf{Taille} & \textbf{Contenu} \\
 \midrule
-\texttt{0x0000}            & 1 mot  & Nombre de blocs $N$ \\
-\texttt{0x0004}+$b \times 64$+$w \times 4$ & $N \times 16$ mots & Donn\'{e}es pr\'{e}-padd\'{e}es \\
-\texttt{0x2000}--\texttt{0x201C} & 8 mots & Condens\'{e} $H_0 \ldots H_7$ \\
+\texttt{0x0000}                    & 1 mot   & Nombre de blocs $N$ \\
+\texttt{0x0004} + $b{\times}64$ + $w{\times}4$ & $N{\times}16$ mots & Donn\'{e}es pr\'{e}-padd\'{e}es \\
+\texttt{0x2000}--\texttt{0x201C}   & 8 mots  & Condens\'{e} r\'{e}sultant $H_0 \ldots H_7$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Le h\^{o}te effectue le padding (ajout du bit '1', z\'{e}ros, longueur) en logiciel
-avant d'\'{e}crire les blocs en m\'{e}moire. Le co-processeur se concentre uniquement
-sur le calcul intensif des 64 rondes --- c'est pr\'{e}cis\'{e}ment cette s\'{e}paration
-des responsabilit\'{e}s qui d\'{e}finit un \textbf{acc\'{e}l\'{e}rateur} : il d\'{e}charge le CPU
-de la partie la plus co\^{u}teuse en calcul.
+Le h\^{o}te effectue le padding en logiciel avant d'\'{e}crire les blocs en m\'{e}moire.
+Le co-processeur se concentre sur le calcul intensif --- c'est cette s\'{e}paration
+des responsabilit\'{e}s qui caract\'{e}rise un acc\'{e}l\'{e}rateur mat\'{e}riel.
+
+\subsection{Protocole d'utilisation}
+
+\begin{enumerate}
+    \item Le h\^{o}te \'{e}crit le nombre de blocs \`{a} l'adresse \texttt{0x0000} ;
+    \item Le h\^{o}te \'{e}crit les blocs pr\'{e}-padd\'{e}s \`{a} partir de \texttt{0x0004} ;
+    \item Le h\^{o}te pulse \texttt{start} pendant un cycle (\texttt{done = '1'}) ;
+    \item Le co-processeur traite tous les blocs automatiquement ;
+    \item Quand \texttt{done} repasse \`{a} '1', le r\'{e}sultat est disponible \`{a}
+          \texttt{0x2000}.
+\end{enumerate}
 
 \subsection{Machine \`{a} \'{e}tats finis (FSM)}
 
-La FSM comporte sept \'{e}tats, illustr\'{e}s par la figure~\ref{fig:fsm}.
+La FSM comporte sept \'{e}tats, illustr\'{e}s par la figure~\ref{fig:fsm_diagram}.
 
 \begin{figure}[H]
 \centering
-\begin{tikzpicture}[
-    state/.style={draw, rounded rectangle, minimum width=1.8cm,
-                  minimum height=0.7cm, font=\scriptsize\bfseries},
-    arrow/.style={-{Stealth[length=2mm]}, thick},
-    node distance=1.5cm
-]
-\node[state] (idle) {IDLE};
-\node[state, right=of idle] (readn) {READ\_NBLK};
-\node[state, right=of readn] (load) {LOAD};
-\node[state, below=of load] (compute) {COMPUTE};
-\node[state, left=of compute] (accum) {ACCUM};
-\node[state, left=of accum] (wb) {WRITEBACK};
-\node[state, above=0.8cm of load, xshift=1.5cm] (pref) {PREFETCH};
-
-\draw[arrow] (idle) -- node[above,font=\tiny]{start} (readn);
-\draw[arrow] (readn) -- node[above,font=\tiny]{1 cyc} (load);
-\draw[arrow] (load) -- node[right,font=\tiny]{ctr=15} (compute);
-\draw[arrow] (compute) -- node[above,font=\tiny]{ctr=64} (accum);
-\draw[arrow] (accum) -- node[above,font=\tiny]{dernier bloc} (wb);
-\draw[arrow] (wb) -- node[left,font=\tiny]{ctr=7} (idle);
-\draw[arrow] (accum.north) |- node[above,font=\tiny,pos=0.7]{bloc suivant} (pref.west);
-\draw[arrow] (pref) -- node[right,font=\tiny]{} (load);
-\end{tikzpicture}
-\caption{Diagramme d'\'{e}tats de la FSM multi-blocs}
-\label{fig:fsm}
+% =====================================================================
+% IMAGE PLACEHOLDER: Diagramme d'\'{e}tats de la FSM
+% Ins\'{e}rer ici le diagramme d'\'{e}tats montrant :
+%   IDLE -> READ_NBLK -> LOAD (16 cyc) -> COMPUTE (49 cyc) -> ACCUM
+%   ACCUM -> PREFETCH -> LOAD (boucle bloc suivant)
+%   ACCUM -> WRITEBACK -> IDLE (dernier bloc)
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3.5cm}
+\textbf{[IMAGE : Diagramme d'\'{e}tats de la FSM multi-blocs]}\\[0.3cm]
+\small \'{E}tats : IDLE, READ\_NBLK, PREFETCH, LOAD, COMPUTE, ACCUM, WRITEBACK.\\
+Transitions : start=1, counter=15, counter=64, bloc\_suivant, dernier\_bloc, wb\_cnt=7.
+\vspace{3.5cm}}}
+\caption{Diagramme d'\'{e}tats de la FSM de contr\^{o}le}
+\label{fig:fsm_diagram}
 \end{figure}
 
-Le chemin principal pour un bloc est :
-\texttt{READ\_NBLK} $\rightarrow$ \texttt{LOAD}(16 cyc) $\rightarrow$
-\texttt{COMPUTE}(49 cyc) $\rightarrow$ \texttt{ACCUM}(1 cyc).
-Pour les blocs suivants, \texttt{ACCUM} boucle via \texttt{PREFETCH} vers
-\texttt{LOAD}.
+\noindent
+\textbf{Description des \'{e}tats :}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{IDLE} : attente du signal \texttt{start} ; adresse 0x0000
+          maintenue sur le bus pour pr\'{e}-lecture du nombre de blocs.
+    \item \textbf{READ\_NBLK} : capture du nombre de blocs ; initialisation de
+          $H$ \`{a} $H_{init}$ ; copie de $H$ dans les registres de travail.
+    \item \textbf{PREFETCH} : utilis\'{e} pour les blocs suivants ; pr\'{e}pare le
+          pipeline d'adresses et copie le $H$ accumul\'{e} dans les registres.
+    \item \textbf{LOAD} : 16 cycles chargeant les mots $W_0 \ldots W_{15}$ dans
+          le Scheduler ; les rondes 0--14 s'ex\'{e}cutent en parall\`{e}le.
+    \item \textbf{COMPUTE} : 49 cycles ex\'{e}cutant les rondes 15--63.
+    \item \textbf{ACCUM} : accumulation $H^{(i)} = H^{(i-1)} + (a \ldots h)$ ;
+          branchement vers PREFETCH (bloc suivant) ou WRITEBACK (dernier).
+    \item \textbf{WRITEBACK} : \'{e}criture s\'{e}quentielle des 8 mots du condens\'{e}
+          \`{a} l'adresse \texttt{0x2000}.
+\end{itemize}
 
 
 % =============================================================================
@@ -369,17 +402,28 @@ Pour les blocs suivants, \texttt{ACCUM} boucle via \texttt{PREFETCH} vers
 \label{sec:impl}
 % =============================================================================
 
-Cette section pr\'{e}sente les extraits de code les plus significatifs.
+Cette section pr\'{e}sente les extraits de code essentiels de chaque module.
+Le code complet est disponible dans le d\'{e}p\^{o}t du projet.
 
-\subsection{Package : fonctions logiques}
+\subsection{Package : types et fonctions logiques}
 
-Le listing~\ref{lst:pkg} montre les fonctions de rotation et $\sigma_0$.
+Le listing~\ref{lst:pkg} montre les fonctions de rotation et d'expansion
+$\sigma_0$. Notons que les rotations (\texttt{ROTR}) sont impl\'{e}ment\'{e}es par
+simple concat\'{e}nation --- en mat\'{e}riel, cela ne co\^{u}te \textbf{aucune} ressource
+logique (c'est un simple reroutage de fils).
 
-\begin{lstlisting}[caption={Extrait de \texttt{SHA256\_pkg.vhd}},label={lst:pkg}]
+\begin{lstlisting}[caption={Extrait de \texttt{SHA256\_pkg.vhd} -- fonctions logiques},
+                   label={lst:pkg}]
 function ROTR (x : in word; n : in integer) return word is
 begin
     return x(n-1 downto 0) & x(31 downto n);
+    -- Zero cost: just wire routing in hardware!
 end function ROTR;
+
+function SHR (x : in word; n : in integer) return word is
+begin
+    return (n-1 downto 0 => '0') & x(31 downto n);
+end function SHR;
 
 function small_sigma0 (x : in word) return word is
 begin
@@ -387,61 +431,34 @@ begin
 end function small_sigma0;
 \end{lstlisting}
 
-\subsection{Module Round : chemin critique de la compression}
+\subsection{Module Round : chemin de donn\'{e}es critique}
 
-La figure~\ref{fig:round_datapath} illustre le chemin de donn\'{e}es combinatoire
-d'une ronde. Le listing~\ref{lst:round} montre le code correspondant.
+Le listing~\ref{lst:round} montre le calcul combinatoire d'une ronde compl\`{e}te.
+La figure~\ref{fig:round_critical} illustre le chemin critique.
 
 \begin{figure}[H]
 \centering
-\begin{tikzpicture}[
-    op/.style={draw, circle, minimum size=0.5cm, font=\tiny, inner sep=1pt},
-    func/.style={draw, rectangle, minimum width=1cm, minimum height=0.5cm,
-                 font=\tiny, fill=blue!10},
-    reg/.style={draw, rectangle, minimum width=0.8cm, minimum height=0.4cm,
-                font=\tiny, fill=yellow!20},
-    arrow/.style={-{Stealth[length=1.5mm]}, thin},
-    node distance=0.5cm
-]
-% T1 chain
-\node[func] (sig1) {$\Sigma_1(e)$};
-\node[func, right=0.4cm of sig1] (ch) {$Ch(e,f,g)$};
-\node[op, below=0.6cm of sig1] (add1) {$+$};
-\node[op, below=0.4cm of add1] (add2) {$+$};
-\node[op, below=0.4cm of add2] (add3) {$+$};
-\node[reg, left=0.8cm of add1] (hreg) {$h$};
-\node[reg, right=0.8cm of add2] (kreg) {$K_t$};
-\node[reg, right=0.8cm of add3] (wreg) {$W_t$};
-
-% T2 chain
-\node[func, right=2.5cm of ch] (sig0) {$\Sigma_0(a)$};
-\node[func, right=0.4cm of sig0] (maj) {$Maj(a,b,c)$};
-\node[op, below=0.6cm of sig0] (add4) {$+$};
-
-% Final adds
-\node[op, below=0.8cm of add3, xshift=1cm] (add5) {$+$};
-\node[reg, below=0.4cm of add5, xshift=-0.8cm] (newa) {$a' = T_1+T_2$};
-\node[reg, below=0.4cm of add5, xshift=1.2cm] (newe) {$e' = d+T_1$};
-
-\draw[arrow] (sig1) -- (add1);
-\draw[arrow] (ch) |- (add1);
-\draw[arrow] (hreg) -- (add1);
-\draw[arrow] (add1) -- (add2);
-\draw[arrow] (kreg) -- (add2);
-\draw[arrow] (add2) -- (add3);
-\draw[arrow] (wreg) -- (add3);
-\draw[arrow] (sig0) -- (add4);
-\draw[arrow] (maj) |- (add4);
-\draw[arrow] (add3) -- node[left,font=\tiny]{$T_1$} (add5);
-\draw[arrow] (add4) |- (add5);
-
-\node[left=0.1cm of add3, font=\tiny, red] {chemin critique};
-\end{tikzpicture}
-\caption{Chemin de donn\'{e}es combinatoire d'une ronde SHA-256}
-\label{fig:round_datapath}
+% =====================================================================
+% IMAGE PLACEHOLDER: Chemin critique de la ronde de compression
+% Ins\'{e}rer ici un sch\'{e}ma montrant :
+%   - Les entr\'{e}es h, e, f, g, Kt, Wt, a, b, c, d
+%   - Les blocs fonctionnels : Sigma1, Ch, Sigma0, Maj
+%   - La cha\^{i}ne d'additionneurs pour T1 (5 op\'{e}randes)
+%   - La sortie T2 et les calculs de new_a et new_e
+%   - Le chemin critique mis en \'{e}vidence (en rouge)
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}
+\textbf{[IMAGE : Chemin de donn\'{e}es d'une ronde SHA-256]}\\[0.3cm]
+\small Montrer : $\Sigma_1(e)$, $Ch(e,f,g)$ en parall\`{e}le avec $\Sigma_0(a)$, $Maj(a,b,c)$.\\
+Cha\^{i}ne critique en rouge : $h + \Sigma_1 + Ch + K_t + W_t$ (4 additions s\'{e}rie).\\
+Sorties : $a' = T_1 + T_2$,\quad $e' = d + T_1$.
+\vspace{4cm}}}
+\caption{Chemin de donn\'{e}es combinatoire d'une ronde (chemin critique en rouge)}
+\label{fig:round_critical}
 \end{figure}
 
-\begin{lstlisting}[caption={Extrait de \texttt{Round.vhd}},label={lst:round}]
+\begin{lstlisting}[caption={Module \texttt{Round.vhd} -- calcul d'une ronde compl\`{e}te},
+                   label={lst:round}]
 t1 <= std_logic_vector( unsigned(h)
                       + unsigned(big_sigma1(e))
                       + unsigned(ch(e, f, g))
@@ -451,106 +468,138 @@ t1 <= std_logic_vector( unsigned(h)
 t2 <= std_logic_vector( unsigned(big_sigma0(a))
                       + unsigned(maj(a, b, c)) );
 
+n_h <= g;  n_g <= f;  n_f <= e;
 n_e <= std_logic_vector(unsigned(d) + unsigned(t1));
+n_d <= c;  n_c <= b;  n_b <= a;
 n_a <= std_logic_vector(unsigned(t1) + unsigned(t2));
 \end{lstlisting}
 
-\subsection{Module Scheduler : expansion du message}
+\subsection{Module Scheduler : fen\^{e}tre glissante}
 
-\begin{lstlisting}[caption={Extrait de \texttt{Scheduler.vhd}},label={lst:sched}]
+Le Scheduler (listing~\ref{lst:sched}) impl\'{e}mente une fen\^{e}tre glissante de
+16 registres. Pour $t < 16$, les mots sont charg\'{e}s depuis la m\'{e}moire. Pour
+$t \geq 16$, le nouveau mot est calcul\'{e} par la r\'{e}currence de
+l'\'{e}quation~\ref{eq:expansion}.
+
+\begin{lstlisting}[caption={Module \texttt{Scheduler.vhd} -- expansion du message},
+                   label={lst:sched}]
 new_w <= std_logic_vector(
     unsigned(small_sigma1(w_window(14)))
   + unsigned(w_window(9))
   + unsigned(small_sigma0(w_window(1)))
   + unsigned(w_window(0)));
 
-output <= w_window(15);
+output <= w_window(15);  -- W[t] for the Round
 
 process(clk)
 begin
     if rising_edge(clk) then
         if shift_e = '1' then
-            w_window(0 to 14) <= w_window(1 to 15);
+            w_window(0 to 14) <= w_window(1 to 15);  -- shift left
         end if;
         if w_src = '0' then
-            w_window(15) <= input;  -- from memory
+            w_window(15) <= input;  -- load from memory (t < 16)
         else
-            w_window(15) <= new_w;  -- computed
+            w_window(15) <= new_w;  -- computed (t >= 16)
         end if;
     end if;
 end process;
 \end{lstlisting}
 
-\subsection{Module FSM : pipeline d'adresses multi-blocs}
+\subsection{Module FSM : pipeline d'adresses et boucle multi-blocs}
 
-Le listing~\ref{lst:fsm} montre la gestion du pipeline d'adresses pour la
-lecture m\'{e}moire, incluant la boucle multi-blocs.
+Le listing~\ref{lst:fsm} montre la partie critique de la FSM : la gestion du
+pipeline d'adresses et la boucle entre blocs.
 
 \begin{lstlisting}[caption={Extrait de \texttt{SHA256\_FSM.vhd} -- boucle multi-blocs},
                    label={lst:fsm}]
+when READ_NBLK =>
+    -- mem_data = num_blocks (from IDLE's steady addr)
+    num_blocks <= to_integer(unsigned(mem_data(7 downto 0)));
+    block_idx  <= 0;
+    binit_i    <= '1';   -- H_result <= H_init
+    addr_reg   <= blk_word_addr(0, 1);  -- queue W[1]
+    state      <= LOAD;
+
 when ACCUM =>
-    -- H += working vars (compute_done was high)
     if block_idx + 1 < num_blocks then
-        -- More blocks: start next block
+        -- Next block: drive W[0] address
         block_idx <= block_idx + 1;
-        addr_reg  <= blk_word_addr(block_idx+1, 0);
+        addr_reg  <= blk_word_addr(block_idx + 1, 0);
         state     <= PREFETCH;
     else
         wb_cnt <= 0;
-        state  <= WRITEBACK;
+        state  <= WRITEBACK;  -- done!
     end if;
 \end{lstlisting}
 
 \subsection{Module Core : registres et accumulation}
 
+Le listing~\ref{lst:core} montre la logique s\'{e}quentielle g\'{e}rant les registres
+de travail et l'accumulation du condens\'{e} entre les blocs.
+
 \begin{lstlisting}[caption={Extrait de \texttt{SHA256\_Core.vhd} -- accumulation multi-blocs},
                    label={lst:core}]
--- Block init: H_result = H_init (first block)
+-- Block init: H = H_init (first block only)
 if block_init = '1' then
     H_result <= H_init;
 end if;
 
--- Per-block: copy H_result -> working regs
+-- Per-block: copy H -> working registers
 if hash_init = '1' then
-    ra <= H_result(0); rb <= H_result(1); ...
+    ra <= H_result(0); rb <= H_result(1);
+    rc <= H_result(2); rd <= H_result(3);
+    re <= H_result(4); rf <= H_result(5);
+    rg <= H_result(6); rh <= H_result(7);
+elsif round_en = '1' then
+    ra <= n_a; rb <= n_b; rc <= n_c; rd <= n_d;
+    re <= n_e; rf <= n_f; rg <= n_g; rh <= n_h;
+end if;
 
--- Accumulate H at end of each block
+-- End of block: accumulate H += working vars
 if compute_done = '1' then
     H_result(0) <= add(H_result(0), ra);
-    H_result(1) <= add(H_result(1), rb); ...
+    H_result(1) <= add(H_result(1), rb);
+    -- ... H_result(2) to H_result(7)
+end if;
 \end{lstlisting}
 
 
 % =============================================================================
-\section{V\'{e}rification et r\'{e}sultats}
+\section{V\'{e}rification fonctionnelle et r\'{e}sultats}
 \label{sec:verif}
 % =============================================================================
 
 \subsection{Strat\'{e}gie de v\'{e}rification}
 
-La v\'{e}rification repose sur un banc de test auto-v\'{e}rifiant qui :
+La v\'{e}rification repose sur un \textbf{banc de test auto-v\'{e}rifiant}
+(\texttt{SHA256\_tb.vhd}) qui automatise enti\`{e}rement le processus :
 \begin{enumerate}
-    \item Pr\'{e}-charge un message (d\'{e}j\`{a} padd\'{e}) dans la m\'{e}moire ;
-    \item Pulse \texttt{start} ;
-    \item Capture les 8 mots \'{e}crits en WRITEBACK ;
-    \item Compare au condens\'{e} de r\'{e}f\'{e}rence (Python \texttt{hashlib.sha256}).
+    \item Pr\'{e}-chargement d'un message padd\'{e} dans la m\'{e}moire ;
+    \item Activation du co-processeur (\texttt{start}) ;
+    \item Capture des 8 mots \'{e}crits pendant WRITEBACK ;
+    \item Comparaison mot par mot avec le condens\'{e} de r\'{e}f\'{e}rence.
 \end{enumerate}
+
+Les condens\'{e}s de r\'{e}f\'{e}rence sont calcul\'{e}s avec Python (\texttt{hashlib.sha256})
+et v\'{e}rifi\'{e}s ind\'{e}pendamment.
 
 \subsection{Vecteurs de test}
 
-Trois vecteurs couvrent les cas critiques (tableau~\ref{tab:vectors}).
+Trois vecteurs couvrent les cas critiques du design
+(tableau~\ref{tab:vectors}).
 
 \begin{table}[H]
 \centering
-\caption{Vecteurs de test utilis\'{e}s}
+\caption{Vecteurs de test utilis\'{e}s pour la v\'{e}rification}
 \label{tab:vectors}
 \begin{tabular}{llcc}
 \toprule
-\textbf{Message} & \textbf{Longueur} & \textbf{Blocs} & \textbf{$H_0$ attendu} \\
+\textbf{Message} & \textbf{Longueur} & \textbf{Blocs} & \textbf{Cas test\'{e}} \\
 \midrule
-\texttt{"abc"} & 24 bits & 1 & \texttt{BA7816BF} \\
-\texttt{"abcd"} & 32 bits & 1 & \texttt{88D4266F} \\
-56 octets NIST$^*$ & 448 bits & 2 & \texttt{248D6A61} \\
+\texttt{"abc"} & 24 bits & 1 & Padding non align\'{e} sur mot \\
+\texttt{"abcd"} & 32 bits & 1 & Padding align\'{e} sur mot \\
+56 octets NIST$^*$ & 448 bits & 2 & \textbf{Multi-blocs} \\
 \bottomrule
 \end{tabular}\\[4pt]
 {\footnotesize $^*$ \texttt{"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"}}
@@ -562,115 +611,267 @@ l'accumulation de $H$ entre les blocs fonctionne correctement.
 \subsection{Environnement de simulation}
 
 \begin{itemize}
-    \item \textbf{Simulateur} : Vivado 2025.2 XSim (Xilinx) + GHDL 4.1.0 ;
-    \item \textbf{Standard VHDL} : compatible VHDL-93 (pas de d\'{e}pendance 2008) ;
+    \item \textbf{Outil} : AMD Vivado 2025.2, simulateur XSim ;
+    \item \textbf{Standard VHDL} : VHDL-93 (aucune d\'{e}pendance 2008) ;
     \item \textbf{P\'{e}riode d'horloge} : 10 ns (100 MHz) ;
     \item \textbf{Dur\'{e}e de simulation} : 5 $\mu$s.
 \end{itemize}
 
-\subsection{R\'{e}sultats}
+\subsection{Capture d'\'{e}cran de simulation}
+
+La figure~\ref{fig:sim_console} montre la sortie console de la simulation
+dans Vivado XSim, confirmant le passage de tous les tests.
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% IMAGE PLACEHOLDER: Capture d'\'{e}cran de la console XSim
+% Ins\'{e}rer ici la capture montrant :
+%   === Test: abc (1 block) ===
+%   H0 ok BA7816BF ... H7 ok F20015AD
+%   === Test: abcd (1 block) ===
+%   H0 ok 88D4266F ... H7 ok 6F031589
+%   === Test: 56-byte NIST (2 blocks) ===
+%   H0 ok 248D6A61 ... H7 ok 19DB06C1
+%   ALL TESTS PASSED
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3.5cm}
+\textbf{[IMAGE : Capture de la console XSim -- ALL TESTS PASSED]}\\[0.3cm]
+\small Montrer la sortie compl\`{e}te de la simulation avec les 3 vecteurs\\
+et le message final \texttt{ALL TESTS PASSED}
+\vspace{3.5cm}}}
+\caption{Sortie de simulation XSim montrant le passage des 3 vecteurs de test}
+\label{fig:sim_console}
+\end{figure}
+
+\subsection{Chronogrammes}
+
+La figure~\ref{fig:waveform_overview} montre les signaux principaux pendant
+le traitement d'un bloc, et la figure~\ref{fig:waveform_multiblock} montre
+la transition entre deux blocs.
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% IMAGE PLACEHOLDER: Chronogramme d'un bloc complet
+% Ins\'{e}rer ici le chronogramme (waveform) montrant sur un bloc :
+%   - clk
+%   - state (IDLE -> READ_NBLK -> LOAD -> COMPUTE -> ACCUM -> WRITEBACK)
+%   - counter (0..15 en LOAD, 16..64 en COMPUTE)
+%   - round_en
+%   - wt (valeurs changeantes)
+%   - mem_wen (pulses en WRITEBACK)
+%   - done
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3.5cm}
+\textbf{[IMAGE : Chronogramme -- traitement d'un bloc complet]}\\[0.3cm]
+\small Signaux : clk, state, counter, round\_en, shift\_e, wt, done, mem\_wen.\\
+Montrer la progression IDLE $\rightarrow$ READ\_NBLK $\rightarrow$ LOAD $\rightarrow$ COMPUTE $\rightarrow$ ACCUM $\rightarrow$ WRITEBACK.
+\vspace{3.5cm}}}
+\caption{Chronogramme du traitement d'un bloc SHA-256 complet}
+\label{fig:waveform_overview}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% IMAGE PLACEHOLDER: Chronogramme multi-blocs (transition entre blocs)
+% Ins\'{e}rer ici le chronogramme montrant la transition entre le bloc 0
+% et le bloc 1 pour le test 56 octets :
+%   - state passant de ACCUM -> PREFETCH -> LOAD (nouveau bloc)
+%   - block_idx changeant de 0 \`{a} 1
+%   - H_result se mettant \`{a} jour \`{a} l'ACCUM
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3.5cm}
+\textbf{[IMAGE : Chronogramme -- transition multi-blocs]}\\[0.3cm]
+\small Montrer la transition ACCUM $\rightarrow$ PREFETCH $\rightarrow$ LOAD (bloc 1).\\
+Signaux : state, block\_idx, H\_result[0], counter, hash\_init.
+\vspace{3.5cm}}}
+\caption{Chronogramme montrant la transition entre le bloc 0 et le bloc 1}
+\label{fig:waveform_multiblock}
+\end{figure}
+
+\subsection{R\'{e}sultats quantitatifs}
+
+Le tableau~\ref{tab:results} r\'{e}sume les temps de compl\'{e}tion mesur\'{e}s en
+simulation.
 
 \begin{table}[H]
 \centering
-\caption{R\'{e}sultats de simulation}
+\caption{R\'{e}sultats de simulation -- temps et nombre de cycles}
 \label{tab:results}
 \begin{tabular}{lcccc}
 \toprule
 \textbf{Test} & \textbf{Blocs} & \textbf{Temps (ns)} & \textbf{Cycles} & \textbf{Statut} \\
 \midrule
-\texttt{"abc"}    & 1 & 965  & 96 & PASS \\
-\texttt{"abcd"}   & 1 & 1955 & 99 & PASS \\
-56 oct.\ NIST     & 2 & 3775 & 188 & PASS \\
+\texttt{"abc"}         & 1 & 965   & 96  & \textbf{PASS} \\
+\texttt{"abcd"}        & 1 & 1\,955 & 99  & \textbf{PASS} \\
+56 oct.\ NIST          & 2 & 3\,775 & 188 & \textbf{PASS} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Le message final de la simulation :
-\begin{verbatim}
-Note: ALL TESTS PASSED
-Time: 3795 ns
-\end{verbatim}
+\subsection{Condens\'{e}s obtenus vs.\ r\'{e}f\'{e}rence}
 
-\subsection{Analyse du d\'{e}bit}
+Le tableau~\ref{tab:digests} montre les condens\'{e}s complets obtenus pour le
+vecteur \texttt{"abc"}, compar\'{e}s \`{a} la valeur officielle NIST.
 
-Pour un bloc de 512 bits trait\'{e} en $\sim$85 cycles \`{a} 100 MHz :
-\[
-\text{D\'{e}bit} = \frac{512}{85 \times 10 \text{ ns}} = 602{,}4 \text{ Mbit/s}
-\]
+\begin{table}[H]
+\centering
+\caption{Condens\'{e} SHA-256 de \texttt{"abc"} -- obtenu vs.\ r\'{e}f\'{e}rence NIST}
+\label{tab:digests}
+\begin{tabular}{cll}
+\toprule
+\textbf{Mot} & \textbf{Obtenu (simulation)} & \textbf{R\'{e}f\'{e}rence NIST} \\
+\midrule
+$H_0$ & \texttt{BA7816BF} & \texttt{BA7816BF} \\
+$H_1$ & \texttt{8F01CFEA} & \texttt{8F01CFEA} \\
+$H_2$ & \texttt{414140DE} & \texttt{414140DE} \\
+$H_3$ & \texttt{5DAE2223} & \texttt{5DAE2223} \\
+$H_4$ & \texttt{B00361A3} & \texttt{B00361A3} \\
+$H_5$ & \texttt{96177A9C} & \texttt{96177A9C} \\
+$H_6$ & \texttt{B410FF61} & \texttt{B410FF61} \\
+$H_7$ & \texttt{F20015AD} & \texttt{F20015AD} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Pour un message multi-blocs de $N$ blocs :
-\[
-\text{Cycles totaux} \approx 2 + N \times (16 + 49 + 1 + 1) + 8 = N \times 67 + 10
-\]
-Le d\'{e}bit asymptotique (grands $N$) est :
-\[
-\frac{512}{67 \times 10 \text{ ns}} = 764 \text{ Mbit/s}
-\]
 
 % =============================================================================
-\section{Optimisations de performance}
-\label{sec:optim}
+\section{Analyse de performance : pourquoi c'est un acc\'{e}l\'{e}rateur}
+\label{sec:accel}
 % =============================================================================
 
-\subsection{Pourquoi c'est un acc\'{e}l\'{e}rateur : analyse d\'{e}taill\'{e}e}
+\subsection{D\'{e}finition d'un acc\'{e}l\'{e}rateur mat\'{e}riel}
 
-La figure~\ref{fig:accel_why} compare visuellement l'ex\'{e}cution logicielle et
-mat\'{e}rielle d'une seule ronde.
+Un \textbf{acc\'{e}l\'{e}rateur mat\'{e}riel} est un circuit sp\'{e}cialis\'{e} qui ex\'{e}cute une
+fonction donn\'{e}e significativement plus vite (ou avec moins d'\'{e}nergie) qu'un
+processeur g\'{e}n\'{e}raliste. Notre co-processeur SHA-256 satisfait pleinement cette
+d\'{e}finition pour trois raisons fondamentales.
+
+\subsection{Raison 1 : Parall\'{e}lisme spatial}
+
+Un processeur g\'{e}n\'{e}raliste ex\'{e}cute les op\'{e}rations \textbf{s\'{e}quentiellement}
+(une instruction par cycle dans le meilleur cas). Notre circuit calcule
+\emph{simultan\'{e}ment} dans des chemins combinatoires d\'{e}di\'{e}s :
+\begin{itemize}
+    \item $\Sigma_1(e)$ et $Ch(e,f,g)$ en parall\`{e}le ;
+    \item $\Sigma_0(a)$ et $Maj(a,b,c)$ en parall\`{e}le ;
+    \item L'expansion $W_t$ (Scheduler) en parall\`{e}le avec la compression.
+\end{itemize}
+
+La figure~\ref{fig:parallel_comparison} illustre cette diff\'{e}rence.
 
 \begin{figure}[H]
 \centering
-\begin{tikzpicture}[
-    box/.style={draw, rectangle, minimum height=0.4cm, font=\tiny},
-    brace/.style={decorate, decoration={brace, amplitude=3pt}},
-]
-% Software timeline
-\node[font=\footnotesize\bfseries] at (0, 1.5) {Logiciel (s\'{e}quentiel)};
-\foreach \i/\lbl in {0/ROTR,1/ROTR,2/ROTR,3/XOR,4/XOR,5/AND,6/NOT,7/AND,
-                     8/XOR,9/ADD,10/ADD,11/ADD,12/ADD} {
-    \node[box, fill=red!20, minimum width=0.35cm] at (\i*0.4, 1) {};
-}
-\draw[brace] (0,-0.1+1) -- (5.2,-0.1+1) node[midway,below,font=\tiny]{$\sim$50 instr.};
-
-% Hardware timeline
-\node[font=\footnotesize\bfseries] at (0, -0.5) {Mat\'{e}riel (parall\`{e}le)};
-\node[box, fill=green!30, minimum width=2.5cm] at (1.25, -1) {\footnotesize 1 cycle};
-\draw[brace] (0,-1.4) -- (2.5,-1.4) node[midway,below,font=\tiny]{tout en parall\`{e}le};
-\end{tikzpicture}
-\caption{Comparaison : une ronde en logiciel vs.\ en mat\'{e}riel}
-\label{fig:accel_why}
+% =====================================================================
+% IMAGE PLACEHOLDER: Comparaison ex\'{e}cution s\'{e}quentielle vs parall\`{e}le
+% Ins\'{e}rer ici un diagramme comparant :
+%   - En haut : timeline CPU (instructions s\'{e}quentielles, ~50 par ronde)
+%   - En bas : timeline FPGA (tout en 1 cycle, chemins parall\`{e}les)
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}
+\textbf{[IMAGE : Comparaison ex\'{e}cution s\'{e}quentielle (CPU) vs.\ parall\`{e}le (FPGA)]}\\[0.3cm]
+\small CPU : $\sim$50 instructions s\'{e}quentielles par ronde.\\
+FPGA : toutes les op\'{e}rations d'une ronde en 1 seul cycle d'horloge.
+\vspace{3cm}}}
+\caption{Parall\'{e}lisme : 50 instructions CPU vs.\ 1 cycle FPGA par ronde}
+\label{fig:parallel_comparison}
 \end{figure}
 
-\textbf{Sources du gain de performance :}
-\begin{enumerate}
-    \item \textbf{Parall\'{e}lisme spatial} : $\Sigma_1(e)$, $Ch(e,f,g)$,
-          $\Sigma_0(a)$, $Maj(a,b,c)$ et $W_t$ sont calcul\'{e}s simultan\'{e}ment
-          dans des circuits d\'{e}di\'{e}s ;
-    \item \textbf{Op\'{e}rations gratuites} : les rotations (ROTR) sont de simples
-          reconnexions de fils --- co\^{u}t z\'{e}ro en mat\'{e}riel ;
-    \item \textbf{Pas de fetch/decode} : chaque cycle est productif (pas
-          d'overhead d'instruction) ;
-    \item \textbf{Pas d'acc\`{e}s cache} : les constantes $K$ et les registres
-          sont directement c\^{a}bl\'{e}s.
-\end{enumerate}
+\subsection{Raison 2 : Op\'{e}rations \`{a} co\^{u}t nul en mat\'{e}riel}
 
-\subsection{Chemin critique et Fmax}
+Certaines op\'{e}rations qui co\^{u}tent des cycles CPU sont \textbf{gratuites} en
+mat\'{e}riel :
+\begin{itemize}
+    \item \textbf{Rotations (ROTR)} : simple reconnexion de fils, co\^{u}t z\'{e}ro
+          en surface et en temps ;
+    \item \textbf{XOR bit-\`{a}-bit} : une seule couche de portes logiques
+          ($<$ 1 ns de d\'{e}lai) ;
+    \item \textbf{S\'{e}lection de $K_t$} : multiplexeur c\^{a}bl\'{e}, pas de lecture
+          m\'{e}moire.
+\end{itemize}
 
-Le chemin critique passe par la cha\^{i}ne d'additions de $T_1$ :
+En logiciel, chaque rotation n\'{e}cessite 2--3 instructions (shift + OR + mask).
+
+\subsection{Raison 3 : Pas d'overhead d'instruction}
+
+Le processeur g\'{e}n\'{e}raliste passe une grande partie de son temps \`{a} :
+\begin{itemize}
+    \item \textbf{Fetch} : lire l'instruction depuis la m\'{e}moire ;
+    \item \textbf{Decode} : interpr\'{e}ter l'opcode ;
+    \item \textbf{Acc\`{e}s registres/cache} : lire les op\'{e}randes.
+\end{itemize}
+
+Notre acc\'{e}l\'{e}rateur n'a \textbf{aucun} de ces overheads. Chaque cycle d'horloge
+est enti\`{e}rement productif.
+
+\subsection{Comparaison quantitative}
+
+Le tableau~\ref{tab:perf_comparison} compare les performances de notre
+acc\'{e}l\'{e}rateur avec diff\'{e}rentes plateformes logicielles.
+
+\begin{table}[H]
+\centering
+\caption{Comparaison de performance : logiciel vs.\ acc\'{e}l\'{e}rateur mat\'{e}riel}
+\label{tab:perf_comparison}
+\begin{tabular}{l r r r r}
+\toprule
+\textbf{Plateforme} & \textbf{Cyc/bloc} & \textbf{Fr\'{e}q.} & \textbf{D\'{e}bit} & \textbf{Gain} \\
+\midrule
+ARM Cortex-M4 (logiciel)       & 3\,500 & 168 MHz & 25 Mb/s   & 1$\times$ \\
+ARM Cortex-A53 (logiciel)      & 1\,800 & 1.2 GHz & 341 Mb/s  & 14$\times$ \\
+Intel i7 (logiciel + AVX2)     & 1\,000 & 4 GHz   & 2\,048 Mb/s & 82$\times$ \\
+\midrule
+\textbf{Notre acc\'{e}l\'{e}rateur} & \textbf{85} & 100 MHz & \textbf{602 Mb/s} & \textbf{24$\times$} \\
+Notre acc\'{e}l\'{e}rateur (200 MHz) & 85 & 200 MHz & 1\,204 Mb/s & 48$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Interpr\'{e}tation} : \`{a} seulement 100 MHz, notre acc\'{e}l\'{e}rateur FPGA
+surpasse un ARM Cortex-M4 cadenc\'{e} \`{a} 168 MHz d'un facteur \textbf{24}. \`{A}
+200 MHz (r\'{e}aliste sur Xilinx Artix-7), le facteur atteint \textbf{48}. De
+plus, pendant que le co-processeur calcule, le CPU h\^{o}te est libre pour
+d'autres t\^{a}ches.
+
+\subsection{D\'{e}bit th\'{e}orique}
+
+Pour un bloc de 512 bits trait\'{e} en 85 cycles :
 \[
-h \xrightarrow{+} \Sigma_1(e) \xrightarrow{+} Ch(e,f,g) \xrightarrow{+} K_t \xrightarrow{+} W_t
+\text{D\'{e}bit} = \frac{512 \text{ bits}}{85 \times 10 \text{ ns}} = 602{,}4 \text{ Mbit/s}
 \]
-Soit 4 additions 32 bits en s\'{e}rie. Sur un FPGA Xilinx Artix-7, chaque
-additionneur 32 bits utilise la cha\^{i}ne de retenue d\'{e}di\'{e}e et prend $\sim$2 ns.
-Le chemin critique total est estim\'{e} \`{a} $\sim$8--10 ns, permettant une Fmax de
-100--125 MHz.
 
-\subsection{Optimisation propos\'{e}e : pr\'{e}-calcul de $K_t + W_t$}
+Pour un message multi-blocs de $N$ blocs (d\'{e}bit asymptotique) :
+\[
+\text{Cycles} \approx N \times 67 + 18 \quad\Rightarrow\quad
+\text{D\'{e}bit}_{N\to\infty} = \frac{512}{67 \times 10\text{ ns}} = 764 \text{ Mbit/s}
+\]
 
-Pour r\'{e}duire le chemin critique, on peut \textbf{pr\'{e}-calculer et registrer}
-la somme $KW = K_t + W_t$ un cycle \`{a} l'avance. Cela r\'{e}duit la cha\^{i}ne
-d'additions de $T_1$ de 4 \`{a} 3, augmentant potentiellement la Fmax de 25\%.
-Cette optimisation est document\'{e}e dans le code source mais non activ\'{e}e dans
-la version actuelle car elle n\'{e}cessite un r\'{e}alignement du pipeline Kt/Wt.
+\subsection{Sch\'{e}ma r\'{e}capitulatif de l'acc\'{e}l\'{e}ration}
+
+La figure~\ref{fig:accel_summary} r\'{e}sume visuellement pourquoi notre design
+constitue un acc\'{e}l\'{e}rateur.
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% IMAGE PLACEHOLDER: Sch\'{e}ma r\'{e}capitulatif de l'acc\'{e}l\'{e}ration
+% Ins\'{e}rer ici un diagramme montrant :
+%   - \`{A} gauche : CPU traitant SHA-256 en ~3500 cycles
+%   - \`{A} droite : Co-processeur en ~85 cycles
+%   - Fl\`{e}che montrant le gain x41
+%   - Annotations : "CPU lib\'{e}r\'{e} pour autres t\^{a}ches"
+% =====================================================================
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}
+\textbf{[IMAGE : R\'{e}capitulatif -- CPU seul vs.\ CPU + Acc\'{e}l\'{e}rateur]}\\[0.3cm]
+\small Gauche : CPU seul (3500 cycles, bloqu\'{e}).\\
+Droite : CPU + co-processeur (85 cycles, CPU libre en parall\`{e}le).\\
+Gain : $\sim$41$\times$ en cycles, CPU disponible pour autres t\^{a}ches.
+\vspace{3cm}}}
+\caption{Synth\`{e}se : le co-processeur acc\'{e}l\`{e}re le calcul et lib\`{e}re le CPU}
+\label{fig:accel_summary}
+\end{figure}
 
 
 % =============================================================================
@@ -678,37 +879,58 @@ la version actuelle car elle n\'{e}cessite un r\'{e}alignement du pipeline Kt/Wt
 \label{sec:bugs}
 % =============================================================================
 
-Lors de la mise au point, trois anomalies ont \'{e}t\'{e} identifi\'{e}es et corrig\'{e}es.
+Lors de la mise au point par simulation, trois anomalies ont \'{e}t\'{e} identifi\'{e}es
+et corrig\'{e}es. Chaque bug est document\'{e} avec son sympt\^{o}me, sa cause racine, et
+la correction appliqu\'{e}e.
 
-\subsection{Bug \#1 : d\'{e}calage dans la lecture m\'{e}moire}
+\subsection{Bug \#1 : D\'{e}calage d'un mot dans la lecture m\'{e}moire}
 
-\textbf{Sympt\^{o}me} : les mots $W_i$ \'{e}taient d\'{e}cal\'{e}s d'une position.
+\begin{description}[leftmargin=!,labelwidth=2cm]
+\item[Sympt\^{o}me] Pour les messages non vides, tous les mots $W_i$ \'{e}taient
+    d\'{e}cal\'{e}s d'une position : le premier mot lu \'{e}tait le mot de contr\^{o}le
+    (nombre de blocs) au lieu de $W_0$.
+\item[Cause] La latence d'un cycle de la RAM synchrone n'\'{e}tait pas
+    correctement compens\'{e}e. L'adresse \texttt{0x0004} (correspondant \`{a} $W_0$)
+    \'{e}tait positionn\'{e}e trop tard sur le bus d'adresses.
+\item[Correction] Avancer l'\'{e}mission de l'adresse $W_0$ d'un cycle en la
+    pla\c{c}ant d\`{e}s la transition IDLE$\rightarrow$READ\_NBLK, et adapter
+    l'arithm\'{e}tique d'adresses en LOAD (\texttt{counter+2} au lieu de
+    \texttt{counter+1}).
+\end{description}
 
-\textbf{Cause} : la latence d'un cycle de la RAM synchrone n'\'{e}tait pas
-correctement compens\'{e}e dans le pipeline d'adresses.
+\subsection{Bug \#2 : Mot $H_0$ incorrect dans le condens\'{e}}
 
-\textbf{Correction} : avancer l'\'{e}mission de l'adresse d'un cycle en la
-pla\c{c}ant d\`{e}s l'\'{e}tat IDLE (sur d\'{e}tection de \texttt{start}).
+\begin{description}[leftmargin=!,labelwidth=2cm]
+\item[Sympt\^{o}me] Pour la cha\^{i}ne vide, $H_1 \ldots H_7$ \'{e}taient corrects
+    mais $H_0$ restait \`{a} la valeur initiale \texttt{0x6A09E667}.
+\item[Cause] L'accumulation finale ($H_i = H_i + a_i$) et l'\'{e}criture en
+    m\'{e}moire se faisaient dans le m\^{e}me cycle. Le premier mot \'{e}crit utilisait
+    la valeur de \texttt{H\_result} \emph{avant} sa mise \`{a} jour.
+\item[Correction] Insertion d'un \'{e}tat \textbf{ACCUM} s\'{e}par\'{e} entre COMPUTE et
+    WRITEBACK, laissant un cycle complet pour la stabilisation du registre.
+\end{description}
 
-\subsection{Bug \#2 : mot $H_0$ incorrect}
+\subsection{Bug \#3 : D\'{e}bordement d'index sur les constantes $K$}
 
-\textbf{Sympt\^{o}me} : $H_0$ restait \`{a} sa valeur initiale.
+\begin{description}[leftmargin=!,labelwidth=2cm]
+\item[Sympt\^{o}me] Erreur d'ex\'{e}cution en simulation : \texttt{index (64) out of
+    bounds (0 to 63)}.
+\item[Cause] Le signal \texttt{counter\_prev} pouvait atteindre 64 (valeur de
+    \texttt{counter} au dernier cycle de COMPUTE), mais le tableau
+    \texttt{K\_cons} n'est index\'{e} que de 0 \`{a} 63.
+\item[Correction] Ajout d'une condition de garde \texttt{counter\_prev < 64}
+    dans l'expression combinatoire de s\'{e}lection de $K_t$.
+\end{description}
 
-\textbf{Cause} : l'accumulation et le writeback se chevauchaient dans le
-m\^{e}me cycle.
+\subsection{Le\c{c}ons apprises}
 
-\textbf{Correction} : insertion d'un \'{e}tat ACCUM s\'{e}par\'{e} pour laisser un
-cycle de stabilisation.
-
-\subsection{Bug \#3 : d\'{e}bordement d'index $K_t$}
-
-\textbf{Sympt\^{o}me} : erreur d'ex\'{e}cution \texttt{index (64) out of bounds}.
-
-\textbf{Cause} : \texttt{counter\_prev} atteignait 64 alors que
-\texttt{K\_cons} n'est index\'{e} que de 0 \`{a} 63.
-
-\textbf{Correction} : ajout d'une garde \texttt{counter\_prev < 64} dans la
-condition de s\'{e}lection de $K_t$.
+Ces bugs illustrent deux difficult\'{e}s classiques de la conception num\'{e}rique :
+\begin{enumerate}
+    \item La gestion rigoureuse du \textbf{pipeline d'adresses} lors de
+          l'interfaçage avec des m\'{e}moires synchrones \`{a} latence ;
+    \item L'importance de v\'{e}rifier les \textbf{conditions aux limites} (premier
+          et dernier cycle d'un \'{e}tat) par simulation exhaustive.
+\end{enumerate}
 
 % =============================================================================
 \section{Conclusion et perspectives}
@@ -718,58 +940,71 @@ condition de s\'{e}lection de $K_t$.
 \subsection{Bilan}
 
 Ce projet a permis de concevoir et valider un \textbf{acc\'{e}l\'{e}rateur mat\'{e}riel
-SHA-256} complet :
+SHA-256} complet et fonctionnel :
 \begin{itemize}
-    \item Conforme \`{a} FIPS 180-4 ;
+    \item Conforme \`{a} la norme FIPS 180-4 ;
     \item Support multi-blocs (messages de longueur arbitraire) ;
     \item Valid\'{e} avec les vecteurs NIST incluant le cas 2 blocs ;
-    \item D\'{e}bit th\'{e}orique de $\sim$600 Mbit/s \`{a} 100 MHz ;
-    \item Gain de 24$\times$ \`{a} 48$\times$ par rapport \`{a} un Cortex-M4.
+    \item D\'{e}bit th\'{e}orique de \textbf{602 Mbit/s} \`{a} 100 MHz ;
+    \item Gain de performance de \textbf{24 \`{a} 48 fois} par rapport \`{a} un
+          processeur embarqu\'{e} (ARM Cortex-M4).
 \end{itemize}
 
-Le terme \og acc\'{e}l\'{e}rateur \fg{} est pleinement justifi\'{e} : le circuit
-exploite le parall\'{e}lisme spatial et la sp\'{e}cialisation mat\'{e}rielle pour
-atteindre des performances inaccessibles en logiciel sur un processeur
-embarqu\'{e}, tout en d\'{e}chargeant le CPU h\^{o}te.
+Le terme \og \textbf{acc\'{e}l\'{e}rateur} \fg{} est pleinement justifi\'{e} : le circuit
+exploite le parall\'{e}lisme spatial, les op\'{e}rations \`{a} co\^{u}t nul (rotations),
+et l'absence d'overhead d'instruction pour atteindre des performances
+inaccessibles en logiciel sur un processeur embarqu\'{e}.
 
-\subsection{Perspectives}
+\subsection{Perspectives d'am\'{e}lioration}
 
 \begin{enumerate}
-    \item \textbf{Interface AXI-Lite} : int\'{e}gration dans un SoC Xilinx (Zynq) ;
-    \item \textbf{Pr\'{e}-calcul $K_t + W_t$} : augmenter Fmax de $\sim$25\% ;
-    \item \textbf{Multi-c\oe{}ur} : instancier $N$ c\oe{}urs en parall\`{e}le pour
-          multiplier le d\'{e}bit par $N$ ;
-    \item \textbf{Support HMAC} : ajouter la couche HMAC-SHA256 pour
-          l'authentification de messages ;
-    \item \textbf{Synth\`{e}se et caract\'{e}risation} : mesurer LUT, FF, BRAM et
-          Fmax r\'{e}elle sur Artix-7 / Zynq-7000.
+    \item \textbf{Interface AXI-Lite} : encapsulation dans un wrapper bus
+          standard pour int\'{e}gration dans un SoC Xilinx Zynq ;
+    \item \textbf{Pr\'{e}-calcul $K_t + W_t$} : registrer la somme un cycle \`{a}
+          l'avance pour r\'{e}duire le chemin critique de $\sim$25\% et
+          augmenter la Fmax ;
+    \item \textbf{Architecture multi-c\oe{}urs} : instancier $N$ c\oe{}urs SHA-256
+          en parall\`{e}le pour multiplier le d\'{e}bit par $N$ (applications
+          blockchain/mining) ;
+    \item \textbf{Support HMAC-SHA256} : ajouter la couche d'authentification
+          de messages ;
+    \item \textbf{Synth\`{e}se FPGA} : caract\'{e}riser les ressources (LUT, FF, BRAM)
+          et mesurer la Fmax r\'{e}elle sur Artix-7 / Zynq-7000.
 \end{enumerate}
 
 % =============================================================================
-% R\'{e}f\'{e}rences
+% R\'{e}f\'{e}rences bibliographiques
 % =============================================================================
+\newpage
 \begin{thebibliography}{9}
 
 \bibitem{fips180}
 National Institute of Standards and Technology (NIST),
 \emph{Secure Hash Standard (SHS)},
 FIPS PUB 180-4, ao\^{u}t 2015.
-\url{https://doi.org/10.6028/NIST.FIPS.180-4}
+Disponible : \url{https://doi.org/10.6028/NIST.FIPS.180-4}
 
-\bibitem{sha256hw}
+\bibitem{mcloone}
 M.~McLoone et J.~McCanny,
 ``Efficient Single-Chip Implementation of SHA-384 and SHA-512'',
-\emph{Proc.\ IEEE FPL}, 2002.
+\emph{Proceedings of IEEE FPL}, 2002.
 
 \bibitem{dadda}
 L.~Dadda, M.~Macchetti et J.~Owen,
 ``An ASIC Design for a High Speed Implementation of the Hash Function SHA-256'',
-\emph{Proc.\ GLSVLSI}, 2004.
+\emph{Proceedings of GLSVLSI}, 2004.
 
 \bibitem{icact2019}
 M.~Dowenbergh et al.,
-``Acceleration of SHA-256 on an FPGA-CPU Cluster Using OpenCL'',
-\emph{Proc.\ ICACT}, 2019.
+``Acceleration of the Secure Hash Algorithm-256 (SHA-256) on an FPGA-CPU Cluster
+Using OpenCL'',
+\emph{Proceedings of ICACT}, 2019.
+
+\bibitem{unfolding}
+B.~Padma Priya et al.,
+``FPGA-based Implementation of SHA-256 with Improvement of Throughput using
+Unfolding Transformation'',
+\emph{IEEE Access}, 2022.
 
 \end{thebibliography}
 
