@@ -1,0 +1,110 @@
+\section{Architecture materielle}
+\label{sec:archi}
+
+\subsection{Choix architectural}
+
+Architecture \textbf{iterative} : une seule instance du circuit de ronde, reutilisee 64 fois (1 ronde/cycle). Compromis optimal surface/debit pour un co-processeur embarque.
+
+\subsection{Diagramme de blocs}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, rectangle, minimum width=2.6cm, minimum height=1.2cm,
+                  align=center, font=\footnotesize, thick, rounded corners=2pt},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick},
+    darrow/.style={{Stealth[length=2.5mm]}-{Stealth[length=2.5mm]}, thick},
+    sig/.style={font=\tiny, midway, fill=white, inner sep=1pt},
+    node distance=1.5cm and 2.5cm
+]
+\node[block, fill=yellow!15] (fsm) {SHA256\_FSM\\{\scriptsize(Controle)}};
+\node[block, fill=green!15, right=3cm of fsm] (sched) {Scheduler\\{\scriptsize(Expansion $W_t$)}};
+\node[block, fill=red!15, below=2cm of sched] (round) {Round\\{\scriptsize(Compression)}};
+\node[block, fill=blue!15, below=2cm of fsm] (regs) {Registres\\{\scriptsize $a..h$ + $H$}};
+\node[block, fill=gray!15, left=2cm of fsm] (mem) {Memoire\\{\scriptsize 16 Ko}};
+\node[block, fill=orange!10, above=0.8cm of mem] (host) {Hote (CPU)};
+
+\draw[arrow] (fsm) -- node[sig, above]{w\_src, shift\_e} (sched);
+\draw[arrow] (sched) -- node[sig, right]{$W_t$} (round);
+\draw[arrow] (fsm.south) -- node[sig, left]{$K_t$, en, init} (regs.north);
+\draw[arrow] (round) -- node[sig, below]{$a'..h'$} (regs);
+\draw[arrow] (regs.east) -- node[sig, below right]{$a..h$} (round.west);
+\draw[darrow] (mem) -- node[sig, above]{addr/data} (fsm);
+\draw[darrow] (host) -- (mem);
+
+\draw[arrow] ([yshift=0.8cm]fsm.north) -- (fsm.north) node[above left, font=\scriptsize, pos=0]{start/done};
+\end{tikzpicture}
+\caption{Architecture globale du co-processeur SHA-256}
+\label{fig:block_diagram}
+\end{figure}
+
+\subsection{Description des modules}
+
+\begin{table}[H]
+\centering
+\caption{Modules VHDL}
+\label{tab:modules}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Module} & \textbf{Role} \\
+\midrule
+\texttt{SHA256\_pkg} & Types, constantes $K_t$/$H_{init}$, fonctions logiques. \\
+\texttt{Round} & Circuit combinatoire d'une ronde. \\
+\texttt{Scheduler} & Fenetre glissante 16 mots + recurrence. \\
+\texttt{SHA256\_FSM} & FSM multi-blocs + pipeline adresses. \\
+\texttt{SHA256\_Core} & Top-level : instancie tout + registres. \\
+\texttt{SHA256\_Memory} & RAM synchrone, latence 1 cycle. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Carte memoire}
+
+\begin{table}[H]
+\centering
+\caption{Organisation memoire}
+\label{tab:memmap}
+\begin{tabular}{lll}
+\toprule
+\textbf{Adresse} & \textbf{Taille} & \textbf{Contenu} \\
+\midrule
+\texttt{0x0000} & 1 mot & Nombre de blocs $N$ \\
+\texttt{0x0004}+$b{\times}64$+$w{\times}4$ & $N{\times}16$ mots & Blocs pre-paddes \\
+\texttt{0x2000}--\texttt{0x201C} & 8 mots & Condense $H_0..H_7$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{FSM multi-blocs}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    state/.style={draw, rounded rectangle, minimum width=1.8cm, minimum height=0.7cm,
+                  font=\scriptsize\bfseries, thick, fill=blue!8},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick},
+    tr/.style={font=\tiny, fill=white, inner sep=1pt},
+    node distance=1.8cm and 2cm
+]
+\node[state] (idle) {IDLE};
+\node[state, right=of idle] (readn) {READ\_NBLK};
+\node[state, right=of readn] (load) {LOAD};
+\node[state, below=1.5cm of load] (compute) {COMPUTE};
+\node[state, left=of compute] (accum) {ACCUM};
+\node[state, left=of accum] (wb) {WRITEBACK};
+\node[state, above right=0.6cm and 0.3cm of compute] (pref) {PREFETCH};
+
+\draw[arrow] (idle) -- node[tr,above]{start} (readn);
+\draw[arrow] (readn) -- node[tr,above]{1cyc} (load);
+\draw[arrow] (load) -- node[tr,right]{c=15} (compute);
+\draw[arrow] (compute) -- node[tr,above]{c=64} (accum);
+\draw[arrow] (accum) -- node[tr,above]{fin} (wb);
+\draw[arrow] (wb) -- node[tr,above]{c=7} (idle);
+\draw[arrow, red!70!black, dashed, thick] (accum.north) |- node[tr,above,pos=0.6,text=red!70!black]{next blk} (pref.west);
+\draw[arrow, red!70!black, dashed, thick] (pref.south) |- (load.east);
+\end{tikzpicture}
+\caption{FSM multi-blocs (boucle en rouge)}
+\label{fig:fsm_diagram}
+\end{figure}
+
+\textbf{Protocole} : le hote ecrit num\_blocks a 0x0000 + les blocs pre-paddes a partir de 0x0004, puis pulse \texttt{start}. Le co-processeur traite tous les blocs et ecrit le condense a 0x2000. Le signal \texttt{done} indique la fin.

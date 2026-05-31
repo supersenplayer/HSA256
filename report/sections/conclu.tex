@@ -1,0 +1,31 @@
+\section{Conclusion et perspectives}
+\label{sec:conclu}
+
+\subsection{Bilan}
+
+Ce projet a permis de concevoir un \textbf{accelerateur materiel SHA-256} :
+\begin{itemize}
+    \item Conforme FIPS 180-4 ;
+    \item Multi-blocs (longueur arbitraire) ;
+    \item Valide avec vecteurs NIST (1 et 2 blocs) ;
+    \item Debit : 602 Mbit/s @ 100 MHz ;
+    \item Gain : 24--48$\times$ vs Cortex-M4.
+\end{itemize}
+
+\subsection{Perspectives}
+
+\begin{enumerate}
+    \item Interface AXI-Lite pour SoC Zynq ;
+    \item Pre-calcul $K_t{+}W_t$ (+25\% Fmax) ;
+    \item Multi-coeurs ($N\times$ debit) ;
+    \item HMAC-SHA256 ;
+    \item Synthese FPGA (LUT/FF/BRAM/Fmax).
+\end{enumerate}
+
+\newpage
+\begin{thebibliography}{9}
+\bibitem{fips180} NIST, \emph{Secure Hash Standard}, FIPS 180-4, 2015.
+\bibitem{mcloone} M. McLoone, J. McCanny, ``SHA-384/512 on FPGA'', IEEE FPL, 2002.
+\bibitem{dadda} L. Dadda et al., ``High Speed SHA-256 ASIC'', GLSVLSI, 2004.
+\bibitem{icact2019} M. Dowenbergh et al., ``SHA-256 on FPGA-CPU Cluster'', ICACT, 2019.
+\end{thebibliography}

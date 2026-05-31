@@ -1,0 +1,30 @@
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Contexte et motivation}
+
+SHA-256 (\emph{Secure Hash Algorithm}, 256 bits), defini par le NIST dans la norme FIPS 180-4~\cite{fips180}, est omnipresent dans la securite numerique : signature electronique, verification d'integrite, protocoles blockchain, et authentification HMAC.
+
+Sur un processeur embarque typique (ARM Cortex-M4 a 168 MHz), le calcul de SHA-256 necessite environ \textbf{3\,500 cycles} par bloc de 512 bits. Pour des applications a haut debit (IoT securise, blockchain, TLS), cela constitue un goulot d'etranglement. Un \textbf{accelerateur materiel} dedie reduit ce cout a $\sim$85 cycles par bloc, soit un gain superieur a $40\times$.
+
+\subsection{Objectifs}
+
+\begin{enumerate}
+    \item Implementer SHA-256 conformement a FIPS 180-4 ;
+    \item Supporter les messages de longueur arbitraire (multi-blocs) ;
+    \item Architecture modulaire, synthetisable sur FPGA Xilinx ;
+    \item Valider par simulation avec les vecteurs NIST ;
+    \item Analyser les performances et justifier le terme << accelerateur >>.
+\end{enumerate}
+
+\subsection{Organisation du rapport}
+
+\begin{itemize}
+    \item Section~\ref{sec:algo} : rappel de l'algorithme SHA-256 ;
+    \item Section~\ref{sec:archi} : architecture materielle ;
+    \item Section~\ref{sec:impl} : implementation VHDL ;
+    \item Section~\ref{sec:verif} : verification et resultats ;
+    \item Section~\ref{sec:accel} : analyse de performance ;
+    \item Section~\ref{sec:bugs} : problemes rencontres ;
+    \item Section~\ref{sec:conclu} : conclusion.
+\end{itemize}

@@ -1,0 +1,27 @@
+\section{Problemes rencontres et corrections}
+\label{sec:bugs}
+
+\subsection{Bug \#1 : Decalage lecture memoire}
+
+\textbf{Symptome} : mots $W_i$ decales d'une position.
+\textbf{Cause} : latence RAM non compensee dans le pipeline d'adresses.
+\textbf{Correction} : avancer l'emission de l'adresse $W_0$ d'un cycle (des IDLE).
+
+\subsection{Bug \#2 : $H_0$ incorrect}
+
+\textbf{Symptome} : $H_0$ restait a la valeur initiale.
+\textbf{Cause} : accumulation et writeback dans le meme cycle.
+\textbf{Correction} : etat ACCUM separe pour stabilisation.
+
+\subsection{Bug \#3 : Debordement index $K_t$}
+
+\textbf{Symptome} : \texttt{index (64) out of bounds}.
+\textbf{Cause} : \texttt{counter\_prev} atteignait 64, $K$ indexe 0..63.
+\textbf{Correction} : garde \texttt{counter\_prev < 64}.
+
+\subsection{Lecons}
+
+\begin{enumerate}
+    \item Pipeline d'adresses memoire synchrone : toujours verifier cycle par cycle ;
+    \item Conditions aux limites (premier/dernier cycle) : tester exhaustivement.
+\end{enumerate}
