@@ -1,0 +1,90 @@
+\section{Algorithme SHA-256}
+\label{sec:algo}
+
+\subsection{Vue d'ensemble}
+
+SHA-256 transforme un message arbitraire en un condense fixe de 256 bits via trois phases (figure~\ref{fig:algo_overview}).
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, rectangle, rounded corners, minimum width=2.2cm,
+                  minimum height=0.9cm, align=center, font=\footnotesize, thick},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick},
+    node distance=0.7cm
+]
+\node[block, fill=blue!10] (msg) {Message\\(arbitraire)};
+\node[block, fill=orange!15, right=of msg] (pad) {Padding\\(align. 512b)};
+\node[block, fill=green!15, right=of pad] (blk) {Decoupage\\en blocs};
+\node[block, fill=red!15, right=of blk] (comp) {64 rondes\\compression};
+\node[block, fill=purple!15, right=of comp] (dig) {Digest\\256 bits};
+
+\draw[arrow] (msg) -- (pad);
+\draw[arrow] (pad) -- (blk);
+\draw[arrow] (blk) -- (comp);
+\draw[arrow] (comp) -- (dig);
+
+\node[below=0.2cm of pad, font=\tiny, text width=2cm, align=center]{+bit '1'\\+zeros\\+longueur 64b};
+\node[below=0.2cm of blk, font=\tiny] {$N \times 512$ bits};
+\node[below=0.2cm of comp, font=\tiny] {$K_t$, $W_t$, $a..h$};
+\end{tikzpicture}
+\caption{Vue d'ensemble du traitement SHA-256}
+\label{fig:algo_overview}
+\end{figure}
+
+\subsection{Padding}
+
+Le message est complete pour obtenir un multiple de 512 bits :
+\begin{enumerate}
+    \item Ajout d'un bit '1' ;
+    \item Ajout de zeros jusqu'a $\equiv 448 \pmod{512}$ ;
+    \item Ajout de la longueur originale sur 64 bits (big-endian).
+\end{enumerate}
+
+\textbf{Exemple} pour \texttt{"abc"} (24 bits) -- resultat : un bloc de 16 mots :
+\begin{verbatim}
+   61626380 00000000 00000000 00000000
+   00000000 00000000 00000000 00000000
+   00000000 00000000 00000000 00000000
+   00000000 00000000 00000000 00000018
+\end{verbatim}
+
+\subsection{Expansion du message}
+
+Les 16 mots d'entree sont etendus en 64 mots par la recurrence :
+\begin{equation}
+W_t = \sigma_1(W_{t-2}) + W_{t-7} + \sigma_0(W_{t-15}) + W_{t-16}
+\quad (16 \leq t \leq 63)
+\label{eq:expansion}
+\end{equation}
+
+\subsection{Compression (64 rondes)}
+
+Chaque ronde $t$ calcule :
+\begin{align}
+T_1 &= h + \Sigma_1(e) + Ch(e,f,g) + K_t + W_t \label{eq:t1}\\
+T_2 &= \Sigma_0(a) + Maj(a,b,c) \label{eq:t2}
+\end{align}
+Puis les variables sont decalees : $h{\leftarrow}g$, ..., $e{\leftarrow}d{+}T_1$, ..., $a{\leftarrow}T_1{+}T_2$.
+
+\begin{table}[H]
+\centering
+\caption{Fonctions logiques de SHA-256}
+\label{tab:fonctions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Fonction} & \textbf{Definition} \\
+\midrule
+$Ch(x,y,z)$   & $(x \wedge y) \oplus (\neg x \wedge z)$ \\
+$Maj(x,y,z)$  & $(x \wedge y) \oplus (x \wedge z) \oplus (y \wedge z)$ \\
+$\Sigma_0(x)$ & $ROTR^{2}(x) \oplus ROTR^{13}(x) \oplus ROTR^{22}(x)$ \\
+$\Sigma_1(x)$ & $ROTR^{6}(x) \oplus ROTR^{11}(x) \oplus ROTR^{25}(x)$ \\
+$\sigma_0(x)$ & $ROTR^{7}(x) \oplus ROTR^{18}(x) \oplus SHR^{3}(x)$ \\
+$\sigma_1(x)$ & $ROTR^{17}(x) \oplus ROTR^{19}(x) \oplus SHR^{10}(x)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Accumulation multi-blocs}
+
+Pour $N$ blocs : $H^{(i)}_j = H^{(i-1)}_j + \text{var}_j$ ($j=0..7$), avec $H^{(0)} = H_{init}$.

@@ -1,0 +1,108 @@
+\section{Implementation VHDL}
+\label{sec:impl}
+
+\subsection{Fonctions logiques (SHA256\_pkg)}
+
+\begin{lstlisting}[caption={Fonctions de rotation -- cout ZERO en hardware},label={lst:pkg}]
+function ROTR (x : in word; n : in integer) return word is
+begin
+    return x(n-1 downto 0) & x(31 downto n);
+end function ROTR;
+
+function small_sigma0 (x : in word) return word is
+begin
+    return ROTR(x,7) xor ROTR(x,18) xor SHR(x,3);
+end function small_sigma0;
+\end{lstlisting}
+
+\subsection{Module Round}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    op/.style={draw, circle, minimum size=0.55cm, font=\scriptsize, thick},
+    func/.style={draw, rectangle, rounded corners, minimum width=1.3cm,
+                 minimum height=0.45cm, font=\scriptsize, thick, fill=green!10},
+    reg/.style={draw, rectangle, minimum width=0.9cm, minimum height=0.35cm,
+                font=\scriptsize, fill=yellow!20},
+    arrow/.style={-{Stealth[length=1.5mm]}, semithick},
+    crit/.style={-{Stealth[length=1.5mm]}, very thick, red},
+]
+\node[reg] (h) at (0,0) {$h$};
+\node[func] (sig1) at (2,0) {$\Sigma_1(e)$};
+\node[func] (ch) at (4,0) {$Ch$};
+\node[reg] (kt) at (6,0) {$K_t$};
+\node[reg] (wt) at (8,0) {$W_t$};
+
+\node[op] (a1) at (1,-1) {$+$};
+\node[op] (a2) at (3,-1) {$+$};
+\node[op] (a3) at (5,-1) {$+$};
+\node[op] (a4) at (7,-1) {$+$};
+
+\node[func] (sig0) at (1,-2.5) {$\Sigma_0(a)$};
+\node[func] (maj) at (3,-2.5) {$Maj$};
+\node[op] (a5) at (2,-3.3) {$+$};
+
+\node[op] (a6) at (5,-2.5) {$+$};
+\node[reg] (d) at (7,-2) {$d$};
+\node[op] (a7) at (7,-2.5) {$+$};
+\node[reg,fill=red!15] (na) at (5,-3.5) {$a'$};
+\node[reg,fill=red!15] (ne) at (7,-3.5) {$e'$};
+
+\draw[crit] (h)--(a1); \draw[crit] (sig1)--(a1);
+\draw[crit] (a1)--(a2); \draw[crit] (ch)--(a2);
+\draw[crit] (a2)--(a3); \draw[crit] (kt)--(a3);
+\draw[crit] (a3)--(a4); \draw[crit] (wt)--(a4);
+\draw[arrow] (sig0)--(a5); \draw[arrow] (maj)--(a5);
+\draw[crit] (a4)|-(a6); \draw[arrow] (a5)--(a6);
+\draw[crit] (a4)|-(a7); \draw[arrow] (d)--(a7);
+\draw[arrow] (a6)--(na); \draw[arrow] (a7)--(ne);
+
+\node[font=\tiny,red] at (4,-1.5) {$T_1$ (chemin critique)};
+\end{tikzpicture}
+\caption{Chemin de donnees d'une ronde (critique en rouge)}
+\label{fig:round_datapath}
+\end{figure}
+
+\begin{lstlisting}[caption={Round.vhd -- compression},label={lst:round}]
+t1 <= std_logic_vector( unsigned(h) + unsigned(big_sigma1(e))
+     + unsigned(ch(e,f,g)) + unsigned(kt) + unsigned(wt) );
+t2 <= std_logic_vector( unsigned(big_sigma0(a))
+     + unsigned(maj(a,b,c)) );
+n_e <= std_logic_vector(unsigned(d) + unsigned(t1));
+n_a <= std_logic_vector(unsigned(t1) + unsigned(t2));
+\end{lstlisting}
+
+\subsection{Scheduler}
+
+\begin{lstlisting}[caption={Scheduler -- fenetre glissante},label={lst:sched}]
+new_w <= std_logic_vector( unsigned(small_sigma1(w_window(14)))
+  + unsigned(w_window(9)) + unsigned(small_sigma0(w_window(1)))
+  + unsigned(w_window(0)));
+output <= w_window(15);
+-- On rising_edge: shift left, insert new word at position 15
+\end{lstlisting}
+
+\subsection{FSM multi-blocs}
+
+\begin{lstlisting}[caption={FSM -- boucle entre blocs},label={lst:fsm}]
+when ACCUM =>
+    if block_idx + 1 < num_blocks then
+        block_idx <= block_idx + 1;
+        addr_reg  <= blk_word_addr(block_idx + 1, 0);
+        state     <= PREFETCH;  -- next block
+    else
+        state <= WRITEBACK;     -- all done
+    end if;
+\end{lstlisting}
+
+\subsection{Core -- accumulation}
+
+\begin{lstlisting}[caption={Core -- registres et accumulation},label={lst:core}]
+if block_init = '1' then  H_result <= H_init;  end if;
+if hash_init = '1' then   ra <= H_result(0); ...  end if;
+if round_en = '1' then    ra <= n_a; rb <= n_b; ...  end if;
+if compute_done = '1' then
+    H_result(0) <= add(H_result(0), ra); ...  -- accumulate
+end if;
+\end{lstlisting}

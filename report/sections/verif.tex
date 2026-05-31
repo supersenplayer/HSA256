@@ -1,0 +1,131 @@
+\section{Verification et resultats}
+\label{sec:verif}
+
+\subsection{Strategie}
+
+Banc de test auto-verifiant : pre-charge message $\rightarrow$ pulse start $\rightarrow$ capture writeback $\rightarrow$ compare au reference (Python \texttt{hashlib}).
+
+\subsection{Vecteurs de test}
+
+\begin{table}[H]
+\centering
+\caption{Vecteurs de test}
+\label{tab:vectors}
+\begin{tabular}{llcc}
+\toprule
+\textbf{Message} & \textbf{Longueur} & \textbf{Blocs} & \textbf{Cas teste} \\
+\midrule
+\texttt{"abc"} & 24 bits & 1 & Padding non-aligne \\
+\texttt{"abcd"} & 32 bits & 1 & Padding aligne \\
+56 octets NIST$^*$ & 448 bits & 2 & \textbf{Multi-blocs} \\
+\bottomrule
+\end{tabular}\\[4pt]
+{\footnotesize $^*$ \texttt{"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"}}
+\end{table}
+
+\subsection{Environnement}
+
+Vivado 2025.2 XSim, VHDL-93, horloge 10 ns, simulation 5 $\mu$s.
+
+\subsection{Resultats de simulation -- console Vivado}
+
+La figure~\ref{fig:sim_console} montre la sortie console confirmant le passage de tous les tests.
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% >>> SCREENSHOT A INSERER <<<
+% Capture de la console XSim montrant :
+%   === Test: abc (1 block) ===  H0 ok ... H7 ok
+%   === Test: abcd (1 block) === H0 ok ... H7 ok
+%   === Test: 56-byte NIST (2 blocks) === H0 ok ... H7 ok
+%   ALL TESTS PASSED
+%
+% Commande : \includegraphics[width=0.9\textwidth]{images/sim_console.png}
+% =====================================================================
+\fbox{\parbox{0.88\textwidth}{\centering\vspace{2.5cm}
+\textbf{[SCREENSHOT VIVADO : Console XSim -- ALL TESTS PASSED]}
+\vspace{2.5cm}}}
+\caption{Sortie console XSim : tous les vecteurs passent}
+\label{fig:sim_console}
+\end{figure}
+
+\subsection{Chronogramme -- traitement d'un bloc}
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% >>> SCREENSHOT A INSERER <<<
+% Waveform XSim montrant pour 1 bloc :
+%   clk, state, counter, round_en, shift_e, wt, done, mem_wen
+%   Progression : IDLE -> READ_NBLK -> LOAD -> COMPUTE -> ACCUM -> WRITEBACK
+%
+% Commande : \includegraphics[width=0.9\textwidth]{images/waveform_1block.png}
+% =====================================================================
+\fbox{\parbox{0.88\textwidth}{\centering\vspace{2.5cm}
+\textbf{[SCREENSHOT VIVADO : Waveform -- 1 bloc complet]}\\
+\small Signaux : clk, state, counter, round\_en, wt, done, mem\_wen
+\vspace{2.5cm}}}
+\caption{Chronogramme du traitement d'un bloc SHA-256}
+\label{fig:waveform_1block}
+\end{figure}
+
+\subsection{Chronogramme -- transition multi-blocs}
+
+\begin{figure}[H]
+\centering
+% =====================================================================
+% >>> SCREENSHOT A INSERER <<<
+% Waveform XSim montrant la transition entre bloc 0 et bloc 1 :
+%   state : ACCUM -> PREFETCH -> LOAD
+%   block_idx : 0 -> 1
+%   hash_init pulse
+%
+% Commande : \includegraphics[width=0.9\textwidth]{images/waveform_multiblock.png}
+% =====================================================================
+\fbox{\parbox{0.88\textwidth}{\centering\vspace{2.5cm}
+\textbf{[SCREENSHOT VIVADO : Waveform -- transition bloc 0 vers bloc 1]}\\
+\small Signaux : state, block\_idx, hash\_init, counter, H\_result[0]
+\vspace{2.5cm}}}
+\caption{Transition multi-blocs : ACCUM $\rightarrow$ PREFETCH $\rightarrow$ LOAD}
+\label{fig:waveform_multiblock}
+\end{figure}
+
+\subsection{Resultats quantitatifs}
+
+\begin{table}[H]
+\centering
+\caption{Temps de completion mesures}
+\label{tab:results}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Test} & \textbf{Blocs} & \textbf{Temps (ns)} & \textbf{Cycles} & \textbf{Statut} \\
+\midrule
+\texttt{"abc"} & 1 & 965 & 96 & \textbf{PASS} \\
+\texttt{"abcd"} & 1 & 1\,955 & 99 & \textbf{PASS} \\
+56 oct. NIST & 2 & 3\,775 & 188 & \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Condense obtenu vs reference}
+
+\begin{table}[H]
+\centering
+\caption{SHA-256(\texttt{"abc"}) : simulation vs reference NIST}
+\label{tab:digests}
+\begin{tabular}{ccc}
+\toprule
+\textbf{Mot} & \textbf{Simulation} & \textbf{NIST} \\
+\midrule
+$H_0$ & \texttt{BA7816BF} & \texttt{BA7816BF} \\
+$H_1$ & \texttt{8F01CFEA} & \texttt{8F01CFEA} \\
+$H_2$ & \texttt{414140DE} & \texttt{414140DE} \\
+$H_3$ & \texttt{5DAE2223} & \texttt{5DAE2223} \\
+$H_4$ & \texttt{B00361A3} & \texttt{B00361A3} \\
+$H_5$ & \texttt{96177A9C} & \texttt{96177A9C} \\
+$H_6$ & \texttt{B410FF61} & \texttt{B410FF61} \\
+$H_7$ & \texttt{F20015AD} & \texttt{F20015AD} \\
+\bottomrule
+\end{tabular}
+\end{table}

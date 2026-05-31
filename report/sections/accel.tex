@@ -1,0 +1,127 @@
+\section{Pourquoi c'est un accelerateur}
+\label{sec:accel}
+
+\subsection{Definition}
+
+Un \textbf{accelerateur materiel} execute une fonction significativement plus vite qu'un processeur generaliste. Notre co-processeur satisfait cette definition pour trois raisons.
+
+\subsection{Raison 1 : Parallelisme spatial}
+
+La figure~\ref{fig:cpu_vs_fpga} compare une ronde en logiciel vs materiel.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rectangle, minimum height=0.4cm, font=\tiny, thick},
+]
+% CPU timeline
+\node[font=\small\bfseries] at (-0.5, 2) {CPU (sequentiel)};
+\foreach \i in {0,...,12} {
+    \node[box, fill=red!20, minimum width=0.38cm] at (\i*0.42, 1.4) {};
+}
+\node[font=\tiny] at (2.5, 0.9) {$\sim$50 instructions par ronde};
+\draw[{Stealth[length=2mm]}-{Stealth[length=2mm]}, thick] (0,0.7) -- (5.4,0.7);
+\node[font=\tiny] at (2.7, 0.4) {$\sim$50 cycles};
+
+% FPGA timeline
+\node[font=\small\bfseries] at (-0.5, -0.5) {FPGA (parallele)};
+\node[box, fill=green!30, minimum width=2.5cm, minimum height=0.6cm] at (1.25, -1.1)
+    {\footnotesize \textbf{1 seul cycle}};
+\draw[{Stealth[length=2mm]}-{Stealth[length=2mm]}, thick] (0,-1.7) -- (2.5,-1.7);
+\node[font=\tiny] at (1.25, -2) {1 cycle};
+
+% Speedup arrow
+\draw[-{Stealth[length=3mm]}, ultra thick, blue!60!black] (6.5, 1.4) -- (6.5, -1.1)
+    node[midway, right, font=\small\bfseries, blue!60!black] {$\times$50};
+\end{tikzpicture}
+\caption{CPU : $\sim$50 instructions/ronde vs FPGA : 1 cycle/ronde}
+\label{fig:cpu_vs_fpga}
+\end{figure}
+
+Le CPU execute sequentiellement. Notre FPGA calcule \textbf{simultanement} $\Sigma_1(e)$, $Ch(e,f,g)$, $\Sigma_0(a)$, $Maj(a,b,c)$, et $W_t$ dans des chemins combinatoires dedies.
+
+\subsection{Raison 2 : Operations a cout nul}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rectangle, minimum width=3.5cm, minimum height=0.6cm,
+                align=left, font=\footnotesize, thick},
+]
+\node[box, fill=red!15] (cpu) at (0,0) {CPU: ROTR = 2-3 instructions\\(shift + OR + mask)};
+\node[box, fill=green!15] (fpga) at (0,-1.3) {FPGA: ROTR = 0 ressource\\(simple reroutage de fils)};
+\node[font=\small\bfseries] at (-3, 0) {Rotation:};
+\draw[-{Stealth[length=2mm]}, thick, blue] (cpu.south) -- (fpga.north)
+    node[midway, right, font=\scriptsize, blue] {Gratuit !};
+\end{tikzpicture}
+\caption{Les rotations sont gratuites en materiel}
+\label{fig:rotr_free}
+\end{figure}
+
+En materiel : rotations = reroutage de fils (0 LUT, 0 ns). XOR = 1 couche de portes ($<$1 ns). Selection $K_t$ = multiplexeur cable (pas de lecture memoire).
+
+\subsection{Raison 3 : Pas d'overhead d'instruction}
+
+Le CPU depense du temps en fetch, decode, acces registres/cache. Notre accelerateur : \textbf{100\% productif} a chaque cycle.
+
+\subsection{Comparaison quantitative}
+
+\begin{table}[H]
+\centering
+\caption{Performance : logiciel vs accelerateur}
+\label{tab:perf}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Plateforme} & \textbf{Cyc/bloc} & \textbf{Freq} & \textbf{Debit} & \textbf{Gain} \\
+\midrule
+ARM Cortex-M4 & 3\,500 & 168 MHz & 25 Mb/s & 1$\times$ \\
+ARM Cortex-A53 & 1\,800 & 1.2 GHz & 341 Mb/s & 14$\times$ \\
+\midrule
+\textbf{Notre accel. (100 MHz)} & \textbf{85} & 100 MHz & \textbf{602 Mb/s} & \textbf{24$\times$} \\
+Notre accel. (200 MHz) & 85 & 200 MHz & 1\,204 Mb/s & 48$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Synthese visuelle}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, rectangle, rounded corners, minimum width=4cm,
+                  minimum height=1.5cm, align=center, font=\footnotesize, thick},
+]
+% Left: CPU alone
+\node[block, fill=red!10] (cpu) at (0,0) {
+    \textbf{CPU seul}\\[3pt]
+    3\,500 cycles/bloc\\
+    CPU bloque pendant le calcul\\
+    Debit : 25 Mbit/s
+};
+
+% Right: CPU + accelerator
+\node[block, fill=green!10] (accel) at (7,0) {
+    \textbf{CPU + Accelerateur}\\[3pt]
+    85 cycles/bloc\\
+    CPU libre pour autres taches\\
+    Debit : 602 Mbit/s
+};
+
+% Arrow
+\draw[-{Stealth[length=4mm]}, ultra thick, blue!60!black] (cpu.east) -- (accel.west)
+    node[midway, above, font=\large\bfseries, blue!60!black] {$\times$24};
+\end{tikzpicture}
+\caption{Gain d'acceleration : CPU seul vs CPU + co-processeur}
+\label{fig:accel_gain}
+\end{figure}
+
+\subsection{Debit theorique}
+
+Un bloc (512 bits) en 85 cycles a 100 MHz :
+\[
+\text{Debit} = \frac{512}{85 \times 10\text{ ns}} = 602{,}4 \text{ Mbit/s}
+\]
+Debit asymptotique ($N$ blocs, overhead amorti) :
+\[
+\frac{512}{67 \times 10\text{ ns}} = 764 \text{ Mbit/s}
+\]
