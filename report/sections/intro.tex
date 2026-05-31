@@ -1,30 +1,61 @@
 \section{Introduction}
 \label{sec:intro}
 
-\subsection{Contexte et motivation}
+\subsection{Contexte général : le hachage cryptographique}
 
-SHA-256 (\emph{Secure Hash Algorithm}, 256 bits), defini par le NIST dans la norme FIPS 180-4~\cite{fips180}, est omnipresent dans la securite numerique : signature electronique, verification d'integrite, protocoles blockchain, et authentification HMAC.
+Le hachage cryptographique constitue l'une des pierres angulaires de la sécurité informatique moderne. Une fonction de hachage transforme un message de longueur arbitraire en une empreinte de taille fixe, appelée condensé ou \emph{digest}. Cette transformation possède trois propriétés fondamentales qui la rendent indispensable en cryptographie. Premièrement, la résistance à la préimage : étant donné un condensé $h$, il est calculatoirement infaisable de retrouver un message $m$ tel que $H(m) = h$. Deuxièmement, la résistance à la seconde préimage : étant donné un message $m_1$, il est infaisable de trouver un message distinct $m_2$ tel que $H(m_1) = H(m_2)$. Troisièmement, la résistance aux collisions : il est infaisable de trouver deux messages distincts $m_1 \neq m_2$ tels que $H(m_1) = H(m_2)$. Ces propriétés garantissent que le condensé agit comme une empreinte digitale unique et irréversible du message original.
 
-Sur un processeur embarque typique (ARM Cortex-M4 a 168 MHz), le calcul de SHA-256 necessite environ \textbf{3\,500 cycles} par bloc de 512 bits. Pour des applications a haut debit (IoT securise, blockchain, TLS), cela constitue un goulot d'etranglement. Un \textbf{accelerateur materiel} dedie reduit ce cout a $\sim$85 cycles par bloc, soit un gain superieur a $40\times$.
+Dans la pratique quotidienne, le hachage cryptographique intervient dans un nombre considérable d'applications. Les signatures électroniques, par exemple, ne signent pas directement le document complet mais uniquement son condensé, ce qui réduit le coût calculatoire tout en garantissant l'intégrité. Les certificats TLS/SSL qui sécurisent les communications HTTPS reposent sur des chaînes de hachage pour vérifier l'authenticité des serveurs. Les systèmes de contrôle de version comme Git identifient chaque commit par son condensé SHA-1 (et bientôt SHA-256). Les protocoles blockchain, à commencer par Bitcoin, utilisent un double hachage SHA-256 pour le minage et la validation des blocs. Enfin, l'authentification par HMAC (Hash-based Message Authentication Code) combine une clé secrète avec SHA-256 pour produire un code d'authentification de message résistant aux falsifications.
 
-\subsection{Objectifs}
+\subsection{Pourquoi SHA-256 spécifiquement}
+
+Parmi la famille des fonctions de hachage standardisées, SHA-256 occupe une position privilégiée. Défini par le National Institute of Standards and Technology (NIST) dans la norme FIPS 180-4~\cite{fips180}, SHA-256 appartient à la famille SHA-2 et produit un condensé de 256 bits (32 octets). Ce choix de taille offre un niveau de sécurité de 128 bits contre les attaques par force brute (paradoxe des anniversaires), ce qui est considéré comme suffisant pour les décennies à venir, même face aux progrès de la cryptanalyse classique.
+
+SHA-256 présente plusieurs avantages par rapport aux alternatives. Comparé à MD5 (128 bits) et SHA-1 (160 bits), tous deux désormais considérés comme cryptographiquement cassés, SHA-256 résiste à toutes les attaques connues à ce jour. Comparé à SHA-3 (basé sur la construction éponge Keccak), SHA-256 offre une structure Merkle-Damgård plus simple à implémenter en matériel et bénéficie d'un écosystème logiciel et matériel bien plus mature. Comparé à SHA-512, SHA-256 utilise des opérations sur 32 bits qui correspondent exactement à la largeur de mot des processeurs embarqués et des FPGA de milieu de gamme, ce qui en fait un candidat idéal pour l'accélération matérielle.
+
+\subsection{Le goulot d'étranglement logiciel}
+
+Sur un processeur embarqué typique tel que l'ARM Cortex-M4 cadencé à 168 MHz, le calcul d'un bloc SHA-256 (512 bits de message) nécessite environ \textbf{3\,500 cycles d'horloge}. Cette durée s'explique par la nature séquentielle de l'exécution : chaque ronde de compression implique une dizaine d'opérations arithmétiques et logiques qui doivent être exécutées instruction par instruction, en passant systématiquement par les étapes de fetch, décodage, exécution et writeback du pipeline processeur. Pour un message d'un mégaoctet, cela représente plus de 7 millions de cycles, soit environ 43 millisecondes --- un temps inacceptable pour des applications temps réel comme le traitement de paquets réseau à haut débit ou la vérification de blocs blockchain.
+
+Ce goulot d'étranglement est particulièrement problématique dans le contexte de l'Internet des Objets (IoT) sécurisé, où les dispositifs doivent simultanément assurer la confidentialité des communications (TLS), vérifier l'authenticité des mises à jour firmware, et maintenir des journaux d'audit signés, le tout avec des contraintes strictes de latence et de consommation énergétique.
+
+\subsection{Le concept de co-processeur matériel}
+
+Un co-processeur matériel, ou accélérateur, est un circuit dédié à l'exécution d'une tâche spécifique, conçu pour fonctionner en parallèle du processeur principal. Contrairement à un processeur généraliste qui exécute des instructions séquentiellement à partir d'une mémoire programme, un co-processeur implémente directement l'algorithme cible dans sa structure logique. Le processeur hôte se contente de charger les données d'entrée, de déclencher le calcul, puis de récupérer le résultat, restant libre d'exécuter d'autres tâches pendant que l'accélérateur travaille.
+
+Cette approche diffère fondamentalement d'un processeur dédié complet (comme un microcontrôleur spécialisé) car le co-processeur ne possède ni unité de fetch d'instructions, ni pile d'appels, ni système d'exploitation. Son comportement est entièrement déterminé par sa machine à états interne et son chemin de données câblé. Cette simplicité architecturale se traduit par une efficacité maximale : chaque cycle d'horloge produit un travail utile directement lié au calcul du condensé, sans aucun overhead d'infrastructure logicielle.
+
+\subsection{La technologie FPGA comme plateforme d'implémentation}
+
+Les FPGA (Field-Programmable Gate Arrays) constituent une plateforme idéale pour le prototypage et le déploiement d'accélérateurs cryptographiques. Un FPGA est un circuit intégré composé de milliers de cellules logiques reconfigurables (LUT -- Look-Up Tables), de bascules (flip-flops), de blocs de mémoire embarquée (Block RAM), et d'éléments de routage programmables. Grâce à un fichier de configuration (bitstream), le développeur peut implémenter n'importe quel circuit numérique synchrone dans le FPGA, avec la possibilité de le modifier et de le re-programmer autant de fois que nécessaire.
+
+Pour SHA-256 en particulier, le FPGA offre trois avantages décisifs. Premièrement, les opérations de rotation de bits, omniprésentes dans l'algorithme, se traduisent par un simple réarrangement des connexions entre les bascules, sans consommer aucune ressource logique ni ajouter aucun délai de propagation. Deuxièmement, la possibilité de paralléliser les calculs au niveau des portes logiques permet d'exécuter simultanément toutes les opérations d'une ronde de compression en un seul cycle d'horloge. Troisièmement, la présence de Block RAM synchrone intégrée fournit une interface mémoire à latence prévisible (exactement un cycle) pour stocker les messages et les résultats.
+
+Dans notre projet, nous ciblons la famille Xilinx (AMD) 7-Series, et plus spécifiquement les dispositifs Artix-7 ou Zynq-7000, qui offrent un bon compromis entre ressources disponibles, fréquence maximale atteignable, et coût. L'environnement de développement Vivado fournit les outils de synthèse, placement-routage, et simulation nécessaires à la validation complète du design.
+
+\subsection{Objectifs du projet}
+
+Ce projet de conception numérique poursuit cinq objectifs principaux, chacun contribuant à démontrer la maîtrise d'un aspect spécifique de la conception de circuits intégrés :
 
 \begin{enumerate}
-    \item Implementer SHA-256 conformement a FIPS 180-4 ;
-    \item Supporter les messages de longueur arbitraire (multi-blocs) ;
-    \item Architecture modulaire, synthetisable sur FPGA Xilinx ;
-    \item Valider par simulation avec les vecteurs NIST ;
-    \item Analyser les performances et justifier le terme << accelerateur >>.
+    \item \textbf{Conformité algorithmique} : implémenter fidèlement l'algorithme SHA-256 tel que défini par la norme FIPS 180-4, en respectant chaque détail de la spécification (endianness, constantes, padding) ;
+    \item \textbf{Support multi-blocs} : gérer correctement les messages de longueur arbitraire nécessitant le traitement séquentiel de plusieurs blocs de 512 bits avec accumulation progressive du condensé ;
+    \item \textbf{Architecture modulaire} : concevoir une hiérarchie de modules VHDL clairement séparés et réutilisables, facilitant la maintenance, la vérification, et l'intégration future dans un SoC ;
+    \item \textbf{Validation fonctionnelle} : démontrer la conformité par simulation exhaustive avec les vecteurs de test officiels du NIST, incluant des cas mono-bloc et multi-blocs ;
+    \item \textbf{Analyse de performance} : quantifier le gain d'accélération par rapport à une exécution logicielle et justifier rigoureusement le qualificatif d'\emph{accélérateur matériel}.
 \end{enumerate}
 
 \subsection{Organisation du rapport}
 
+Le présent rapport est structuré en sept sections qui suivent la démarche naturelle de conception d'un circuit numérique, depuis la spécification algorithmique jusqu'à la validation finale :
+
 \begin{itemize}
-    \item Section~\ref{sec:algo} : rappel de l'algorithme SHA-256 ;
-    \item Section~\ref{sec:archi} : architecture materielle ;
-    \item Section~\ref{sec:impl} : implementation VHDL ;
-    \item Section~\ref{sec:verif} : verification et resultats ;
-    \item Section~\ref{sec:accel} : analyse de performance ;
-    \item Section~\ref{sec:bugs} : problemes rencontres ;
-    \item Section~\ref{sec:conclu} : conclusion.
+    \item La section~\ref{sec:algo} présente un rappel détaillé de l'algorithme SHA-256, avec une explication intuitive de chaque fonction et un exemple numérique complet ;
+    \item La section~\ref{sec:archi} décrit l'architecture matérielle retenue, en justifiant les choix de conception par une analyse comparative des alternatives ;
+    \item La section~\ref{sec:impl} détaille l'implémentation VHDL module par module, avec les extraits de code commentés et les diagrammes de chemin de données ;
+    \item La section~\ref{sec:verif} expose la méthodologie de vérification, les résultats de simulation, et l'analyse des chronogrammes ;
+    \item La section~\ref{sec:accel} démontre quantitativement pourquoi notre design mérite le qualificatif d'accélérateur matériel ;
+    \item La section~\ref{sec:bugs} documente les problèmes rencontrés durant le développement et les solutions apportées ;
+    \item La section~\ref{sec:conclu} conclut par un bilan des réalisations et propose des perspectives d'amélioration.
 \end{itemize}
+

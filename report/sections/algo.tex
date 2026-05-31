@@ -1,9 +1,11 @@
 \section{Algorithme SHA-256}
 \label{sec:algo}
 
-\subsection{Vue d'ensemble}
+\subsection{Vue d'ensemble et construction de Merkle-Damgård}
 
-SHA-256 transforme un message arbitraire en un condense fixe de 256 bits via trois phases (figure~\ref{fig:algo_overview}).
+SHA-256 appartient à la famille des fonctions de hachage itératives basées sur la construction de Merkle-Damgård. Cette construction, proposée indépendamment par Ralph Merkle et Ivan Damgård en 1989, transforme une fonction de compression à entrée fixe en une fonction de hachage capable de traiter des messages de longueur arbitraire. Le principe est élégant : le message est d'abord découpé en blocs de taille fixe (512 bits pour SHA-256), puis chaque bloc est traité séquentiellement par une fonction de compression qui met à jour un état interne (le vecteur de hachage intermédiaire). L'état final constitue le condensé du message complet.
+
+Plus précisément, SHA-256 transforme un message arbitraire en un condensé fixe de 256 bits (huit mots de 32 bits) via trois phases successives représentées dans la figure~\ref{fig:algo_overview} : le padding (complétion du message), l'expansion (génération des 64 mots de travail à partir des 16 mots d'entrée), et la compression (64 rondes de mélange non-linéaire).
 
 \begin{figure}[H]
 \centering
@@ -15,7 +17,7 @@ SHA-256 transforme un message arbitraire en un condense fixe de 256 bits via tro
 ]
 \node[block, fill=blue!10] (msg) {Message\\(arbitraire)};
 \node[block, fill=orange!15, right=of msg] (pad) {Padding\\(align. 512b)};
-\node[block, fill=green!15, right=of pad] (blk) {Decoupage\\en blocs};
+\node[block, fill=green!15, right=of pad] (blk) {Découpage\\en blocs};
 \node[block, fill=red!15, right=of blk] (comp) {64 rondes\\compression};
 \node[block, fill=purple!15, right=of comp] (dig) {Digest\\256 bits};
 
@@ -32,16 +34,32 @@ SHA-256 transforme un message arbitraire en un condense fixe de 256 bits via tro
 \label{fig:algo_overview}
 \end{figure}
 
-\subsection{Padding}
+La sécurité de SHA-256 repose sur le fait que la fonction de compression est conçue pour être une fonction à sens unique : même en connaissant l'état interne avant et après le traitement d'un bloc, il est calculatoirement impossible de déduire le contenu du bloc traité. Cette propriété est obtenue grâce à la combinaison de trois types d'opérations fondamentales : les additions modulaires sur 32 bits (non-linéarité arithmétique), les opérations logiques bit à bit (non-linéarité booléenne), et les rotations/décalages de bits (diffusion).
 
-Le message est complete pour obtenir un multiple de 512 bits :
+\subsection{Phase 1 : Padding (complétion du message)}
+
+Avant tout traitement, le message doit être complété pour que sa longueur totale soit un multiple exact de 512 bits. Cette opération de padding est déterministe et réversible, ce qui signifie que deux messages distincts produiront toujours des messages paddés distincts --- une propriété essentielle pour la sécurité.
+
+La procédure de padding se décompose en trois étapes :
+
 \begin{enumerate}
-    \item Ajout d'un bit '1' ;
-    \item Ajout de zeros jusqu'a $\equiv 448 \pmod{512}$ ;
-    \item Ajout de la longueur originale sur 64 bits (big-endian).
+    \item \textbf{Ajout d'un bit '1'} immédiatement après le dernier bit du message original. Ce bit sentinelle marque sans ambiguïté la fin du message, même si celui-ci se termine par des zéros.
+    \item \textbf{Ajout de bits '0'} en nombre suffisant pour que la longueur totale soit congrue à 448 modulo 512. Autrement dit, on laisse exactement 64 bits libres à la fin du dernier bloc de 512 bits.
+    \item \textbf{Ajout de la longueur originale} du message (en bits) encodée sur 64 bits en format big-endian. Cette inclusion de la longueur empêche les attaques par extension de longueur sur des schémas mal conçus.
 \end{enumerate}
 
-\textbf{Exemple} pour \texttt{"abc"} (24 bits) -- resultat : un bloc de 16 mots :
+Il est important de noter que si le message original a une longueur telle que $L + 1 + 64 > 512k$ (où $k$ est le nombre de blocs avant padding), alors un bloc supplémentaire est nécessaire. C'est exactement ce qui se produit avec le vecteur de test NIST de 56 octets (448 bits) : après ajout du bit '1', il ne reste plus assez de place dans le premier bloc pour les 64 bits de longueur, nécessitant un second bloc.
+
+\textbf{Exemple concret} pour le message \texttt{"abc"} (3 octets = 24 bits en ASCII) :
+
+\begin{verbatim}
+   Message original :  61 62 63  (hex) = 24 bits
+   + bit '1' :        61626380  (le '8' = bit 1 suivi de zeros)
+   + zeros :          00000000 ... (jusqu'a 448 bits)
+   + longueur 64b :   00000000 00000018  (24 en decimal = 0x18)
+\end{verbatim}
+
+Le résultat est un unique bloc de 16 mots de 32 bits :
 \begin{verbatim}
    61626380 00000000 00000000 00000000
    00000000 00000000 00000000 00000000
@@ -49,42 +67,163 @@ Le message est complete pour obtenir un multiple de 512 bits :
    00000000 00000000 00000000 00000018
 \end{verbatim}
 
-\subsection{Expansion du message}
+Dans notre implémentation matérielle, le padding est effectué par le logiciel hôte avant le chargement en mémoire. Ce choix architectural simplifie considérablement le co-processeur en éliminant la nécessité d'une logique de padding matérielle, tout en offrant une flexibilité maximale au logiciel pour gérer les cas limites.
 
-Les 16 mots d'entree sont etendus en 64 mots par la recurrence :
+\subsection{Phase 2 : Expansion du message ($W_t$)}
+
+Chaque bloc de 512 bits fournit 16 mots de 32 bits ($W_0$ à $W_{15}$) qui sont directement extraits du message paddé. Ces 16 mots sont ensuite étendus en une séquence de 64 mots ($W_0$ à $W_{63}$) par la relation de récurrence suivante :
+
 \begin{equation}
 W_t = \sigma_1(W_{t-2}) + W_{t-7} + \sigma_0(W_{t-15}) + W_{t-16}
-\quad (16 \leq t \leq 63)
+\quad \text{pour } 16 \leq t \leq 63
 \label{eq:expansion}
 \end{equation}
 
-\subsection{Compression (64 rondes)}
+Les fonctions $\sigma_0$ et $\sigma_1$ (dites \emph{small sigma}) sont des fonctions de mélange de bits définies par :
 
-Chaque ronde $t$ calcule :
+\begin{align}
+\sigma_0(x) &= ROTR^{7}(x) \oplus ROTR^{18}(x) \oplus SHR^{3}(x) \label{eq:ssig0} \\
+\sigma_1(x) &= ROTR^{17}(x) \oplus ROTR^{19}(x) \oplus SHR^{10}(x) \label{eq:ssig1}
+\end{align}
+
+L'intuition derrière cette expansion est cruciale pour comprendre la sécurité de SHA-256. La combinaison de rotations à différentes distances et du décalage logique (SHR) assure que chaque bit d'un mot $W_t$ dépend de manière complexe et non-linéaire de bits provenant de quatre mots précédents situés à des distances variées (2, 7, 15, 16 positions en arrière). Cette dépendance croisée garantit qu'une modification d'un seul bit dans le message original se propage rapidement à tous les mots $W_t$ par effet avalanche, rendant impossible toute manipulation ciblée du condensé final.
+
+La présence du décalage logique $SHR$ (contrairement à la rotation $ROTR$ qui est bijective) introduit une perte d'information volontaire : certains bits sont irrémédiablement remplacés par des zéros. Cette asymétrie contribue à la propriété de sens unique de la fonction de hachage globale.
+
+\subsection{Phase 3 : Compression (64 rondes)}
+
+Le coeur de SHA-256 est sa fonction de compression, qui applique 64 rondes de transformation à un état interne constitué de huit mots de 32 bits notés $a, b, c, d, e, f, g, h$. Au début du traitement d'un bloc, cet état est initialisé avec le vecteur de hachage intermédiaire courant (pour le premier bloc, il s'agit des constantes $H_{init}$ définies par la norme).
+
+À chaque ronde $t$ (pour $0 \leq t \leq 63$), les transformations suivantes sont appliquées :
+
 \begin{align}
 T_1 &= h + \Sigma_1(e) + Ch(e,f,g) + K_t + W_t \label{eq:t1}\\
 T_2 &= \Sigma_0(a) + Maj(a,b,c) \label{eq:t2}
 \end{align}
-Puis les variables sont decalees : $h{\leftarrow}g$, ..., $e{\leftarrow}d{+}T_1$, ..., $a{\leftarrow}T_1{+}T_2$.
+
+Puis les huit variables de travail sont mises à jour simultanément :
+\[
+h \leftarrow g, \quad g \leftarrow f, \quad f \leftarrow e, \quad e \leftarrow d + T_1
+\]
+\[
+d \leftarrow c, \quad c \leftarrow b, \quad b \leftarrow a, \quad a \leftarrow T_1 + T_2
+\]
+
+Les fonctions logiques utilisées dans ces équations sont détaillées dans le tableau~\ref{tab:fonctions}. Chacune possède un rôle spécifique dans la construction de la sécurité cryptographique.
 
 \begin{table}[H]
 \centering
-\caption{Fonctions logiques de SHA-256}
+\caption{Fonctions logiques de SHA-256 et leur rôle cryptographique}
 \label{tab:fonctions}
-\begin{tabular}{ll}
+\begin{tabular}{lll}
 \toprule
-\textbf{Fonction} & \textbf{Definition} \\
+\textbf{Fonction} & \textbf{Définition} & \textbf{Rôle} \\
 \midrule
-$Ch(x,y,z)$   & $(x \wedge y) \oplus (\neg x \wedge z)$ \\
-$Maj(x,y,z)$  & $(x \wedge y) \oplus (x \wedge z) \oplus (y \wedge z)$ \\
-$\Sigma_0(x)$ & $ROTR^{2}(x) \oplus ROTR^{13}(x) \oplus ROTR^{22}(x)$ \\
-$\Sigma_1(x)$ & $ROTR^{6}(x) \oplus ROTR^{11}(x) \oplus ROTR^{25}(x)$ \\
-$\sigma_0(x)$ & $ROTR^{7}(x) \oplus ROTR^{18}(x) \oplus SHR^{3}(x)$ \\
-$\sigma_1(x)$ & $ROTR^{17}(x) \oplus ROTR^{19}(x) \oplus SHR^{10}(x)$ \\
+$Ch(x,y,z)$   & $(x \wedge y) \oplus (\neg x \wedge z)$ & Sélection conditionnelle \\
+$Maj(x,y,z)$  & $(x \wedge y) \oplus (x \wedge z) \oplus (y \wedge z)$ & Vote majoritaire \\
+$\Sigma_0(x)$ & $ROTR^{2}(x) \oplus ROTR^{13}(x) \oplus ROTR^{22}(x)$ & Diffusion (branche $a$) \\
+$\Sigma_1(x)$ & $ROTR^{6}(x) \oplus ROTR^{11}(x) \oplus ROTR^{25}(x)$ & Diffusion (branche $e$) \\
+$\sigma_0(x)$ & $ROTR^{7}(x) \oplus ROTR^{18}(x) \oplus SHR^{3}(x)$ & Expansion (mélange) \\
+$\sigma_1(x)$ & $ROTR^{17}(x) \oplus ROTR^{19}(x) \oplus SHR^{10}(x)$ & Expansion (mélange) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+\subsection{Intuition sur les fonctions logiques}
+
+\paragraph{La fonction $Ch$ (Choose)} agit comme un multiplexeur bit à bit : pour chaque position de bit, si le bit correspondant de $x$ vaut 1, le résultat prend le bit de $y$ ; sinon, il prend le bit de $z$. D'où son nom « choose » --- $x$ choisit entre $y$ et $z$. Cette opération est non-linéaire au sens booléen car elle combine AND et XOR, ce qui empêche toute simplification algébrique linéaire.
+
+\paragraph{La fonction $Maj$ (Majority)} calcule le vote majoritaire bit à bit : pour chaque position, le résultat vaut 1 si et seulement si au moins deux des trois entrées valent 1. Cette fonction est symétrique en ses trois arguments et produit un mélange non-linéaire qui résiste aux attaques différentielles.
+
+\paragraph{Les fonctions $\Sigma_0$ et $\Sigma_1$ (Big Sigma)} assurent la diffusion au sein de chaque ronde. En combinant trois rotations à des distances soigneusement choisies (2, 13, 22 pour $\Sigma_0$ et 6, 11, 25 pour $\Sigma_1$), elles garantissent que chaque bit de sortie dépend de bits d'entrée provenant de positions très éloignées. Les distances ont été choisies par la NSA pour maximiser la diffusion et minimiser les corrélations statistiques après un nombre minimal de rondes.
+
+\subsection{Les constantes $K_t$ et leur origine}
+
+L'algorithme utilise 64 constantes $K_0, K_1, \ldots, K_{63}$, chacune un mot de 32 bits. Ces constantes sont les 32 premiers bits de la partie fractionnaire des racines cubiques des 64 premiers nombres premiers :
+\[
+K_t = \lfloor 2^{32} \times \text{frac}(\sqrt[3]{p_t}) \rfloor
+\]
+où $p_0 = 2, p_1 = 3, p_2 = 5, \ldots, p_{63} = 311$. Par exemple, $K_0 = \lfloor 2^{32} \times \text{frac}(\sqrt[3]{2}) \rfloor = \lfloor 2^{32} \times 0.259921\ldots \rfloor = \texttt{0x428A2F98}$.
+
+L'utilisation de constantes dérivées de nombres premiers sert un double objectif. D'une part, elle élimine tout soupçon de « backdoor » : les constantes ne contiennent aucune structure cachée puisqu'elles sont déterministes et publiquement vérifiables (principe « nothing up my sleeve »). D'autre part, leur complexité binaire assure que les opérations d'addition avec $K_t$ perturbent efficacement les motifs réguliers qui pourraient subsister dans l'état interne.
+
+\subsection{Pourquoi exactement 64 rondes}
+
+Le choix de 64 rondes résulte d'une analyse de sécurité approfondie. Les concepteurs de SHA-256 (rattachés à la NSA) ont déterminé expérimentalement et théoriquement qu'après 64 rondes, l'état interne atteint une diffusion complète : chaque bit du condensé dépend de manière complexe et non-linéaire de chaque bit du message d'entrée. Des versions réduites de SHA-256 avec moins de rondes sont vulnérables à diverses attaques :
+
+\begin{itemize}
+    \item Avec 22 rondes ou moins, des attaques par collision pratiques ont été démontrées ;
+    \item Avec 31 rondes, des attaques par préimage sont théoriquement possibles ;
+    \item Avec 46 rondes, des distingueurs (différenciation de la sortie d'un oracle aléatoire) existent.
+\end{itemize}
+
+La marge de sécurité de $64 - 46 = 18$ rondes au-delà du meilleur distingueur connu offre une protection confortable contre les avancées futures de la cryptanalyse, sans pénaliser excessivement les performances.
+
+\subsection{Exemple numérique : ronde 0 pour le message "abc"}
+
+Pour illustrer concrètement le fonctionnement de l'algorithme, déroulons la première ronde ($t = 0$) du hachage de \texttt{"abc"}. L'état initial est le vecteur $H_{init}$ défini par la norme :
+
+\begin{verbatim}
+  a = 6A09E667    e = 510E527F
+  b = BB67AE85    f = 9B05688C
+  c = 3C6EF372    g = 1F83D9AB
+  d = A54FF53A    h = 5BE0CD19
+\end{verbatim}
+
+Avec $K_0 = \texttt{428A2F98}$ et $W_0 = \texttt{61626380}$ (premier mot du message paddé), calculons :
+
+\begin{align*}
+\Sigma_1(e) &= ROTR^6(\texttt{510E527F}) \oplus ROTR^{11}(\texttt{510E527F}) \oplus ROTR^{25}(\texttt{510E527F}) \\
+            &= \texttt{3A1FE3CE}
+\end{align*}
+
+\begin{align*}
+Ch(e,f,g) &= (\texttt{510E527F} \wedge \texttt{9B05688C}) \oplus (\neg\texttt{510E527F} \wedge \texttt{1F83D9AB}) \\
+           &= \texttt{1F85C98C}
+\end{align*}
+
+\begin{align*}
+T_1 &= h + \Sigma_1(e) + Ch(e,f,g) + K_0 + W_0 \\
+    &= \texttt{5BE0CD19} + \texttt{3A1FE3CE} + \texttt{1F85C98C} + \texttt{428A2F98} + \texttt{61626380} \\
+    &= \texttt{5D6AEBB1} \pmod{2^{32}}
+\end{align*}
+
+\begin{align*}
+\Sigma_0(a) &= ROTR^2(\texttt{6A09E667}) \oplus ROTR^{13}(\texttt{6A09E667}) \oplus ROTR^{22}(\texttt{6A09E667}) \\
+            &= \texttt{CE20B47E}
+\end{align*}
+
+\begin{align*}
+Maj(a,b,c) &= (\texttt{6A09E667} \wedge \texttt{BB67AE85}) \oplus (\texttt{6A09E667} \wedge \texttt{3C6EF372}) \\
+           &\quad \oplus (\texttt{BB67AE85} \wedge \texttt{3C6EF372}) = \texttt{3A6FE667}
+\end{align*}
+
+\begin{align*}
+T_2 &= \Sigma_0(a) + Maj(a,b,c) = \texttt{CE20B47E} + \texttt{3A6FE667} = \texttt{08909AE5}
+\end{align*}
+
+Les nouvelles valeurs des registres après la ronde 0 sont donc :
+\begin{align*}
+a' &= T_1 + T_2 = \texttt{5D6AEBB1} + \texttt{08909AE5} = \texttt{65FB8696} \\
+e' &= d + T_1 = \texttt{A54FF53A} + \texttt{5D6AEBB1} = \texttt{02BAE0EB}
+\end{align*}
+
+Les autres registres se décalent simplement : $b' = a, c' = b, d' = c, f' = e, g' = f, h' = g$. Ce processus se répète 63 fois de plus avec des valeurs de $K_t$ et $W_t$ différentes à chaque ronde.
+
 \subsection{Accumulation multi-blocs}
 
-Pour $N$ blocs : $H^{(i)}_j = H^{(i-1)}_j + \text{var}_j$ ($j=0..7$), avec $H^{(0)} = H_{init}$.
+Une fois les 64 rondes terminées pour un bloc donné, les valeurs finales des registres de travail $a, b, \ldots, h$ sont additionnées (modulo $2^{32}$) aux valeurs du vecteur de hachage intermédiaire :
+
+\begin{equation}
+H^{(i)}_j = H^{(i-1)}_j + \text{var}_j \quad \text{pour } j = 0, 1, \ldots, 7
+\label{eq:accum}
+\end{equation}
+
+où $H^{(0)} = H_{init}$ est le vecteur d'initialisation défini par la norme, et $\text{var}_j$ désigne les registres $a$ à $h$ après les 64 rondes du bloc $i$. Pour un message constitué de $N$ blocs, ce processus d'accumulation est répété $N$ fois, et le condensé final est la concaténation $H^{(N)}_0 \| H^{(N)}_1 \| \ldots \| H^{(N)}_7$ (256 bits au total).
+
+Cette structure d'accumulation additive est ce qui confère à la construction de Merkle-Damgård sa capacité à traiter des messages de longueur arbitraire de manière incrémentale, sans nécessiter de stocker l'intégralité du message en mémoire. Pour notre implémentation matérielle, cela signifie que le co-processeur peut traiter un message de plusieurs gigaoctets bloc par bloc, en ne conservant en mémoire que le vecteur de hachage intermédiaire de 256 bits entre chaque bloc.
+
+\subsection{Propriétés de sécurité résultantes}
+
+La combinaison de toutes ces composantes --- padding incluant la longueur, expansion avec diffusion croisée, compression par rondes non-linéaires avec constantes irrationnelles, et accumulation additive --- confère à SHA-256 un ensemble de propriétés de sécurité qui restent intactes à ce jour après plus de vingt ans de cryptanalyse intensive par la communauté scientifique mondiale. La meilleure attaque connue contre SHA-256 complet reste la recherche exhaustive, avec une complexité de $2^{128}$ opérations pour trouver une collision et $2^{256}$ pour une préimage --- des valeurs considérées comme inaccessibles avec la technologie actuelle et prévisible.
+
