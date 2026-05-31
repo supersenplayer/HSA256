@@ -1,11 +1,38 @@
-\section{Architecture materielle}
+\section{Architecture matérielle}
 \label{sec:archi}
 
-\subsection{Choix architectural}
+\subsection{Exploration de l'espace de conception}
 
-Architecture \textbf{iterative} : une seule instance du circuit de ronde, reutilisee 64 fois (1 ronde/cycle). Compromis optimal surface/debit pour un co-processeur embarque.
+La conception d'un accélérateur SHA-256 en matériel impose un choix fondamental d'architecture qui détermine le compromis entre surface silicium (nombre de LUT et bascules consommées), débit (nombre de condensés par seconde), latence (nombre de cycles pour un bloc), et fréquence maximale d'horloge. Trois grandes familles d'architectures sont couramment considérées dans la littérature.
 
-\subsection{Diagramme de blocs}
+\paragraph{Architecture totalement déroulée (fully unrolled)} Cette approche instancie physiquement 64 copies du circuit de ronde en cascade, connectées en série. Le message entre d'un côté et le condensé sort de l'autre après un seul cycle d'horloge (ou un pipeline de 64 étages). L'avantage est un débit maximal théorique : un nouveau bloc peut être traité à chaque cycle d'horloge (débit de $512 \times f_{clk}$ bits/s). L'inconvénient majeur est la surface : 64 copies du circuit de ronde représentent environ 64 fois plus de LUT, ce qui peut dépasser les ressources disponibles sur un FPGA de milieu de gamme. De plus, le chemin critique combinatoire traverse les 64 étages, réduisant drastiquement la fréquence atteignable en l'absence de pipeline.
+
+\paragraph{Architecture pipelinée} Un compromis consiste à insérer des registres de pipeline entre les 64 rondes. Chaque étage contient une copie du circuit de ronde suivie d'un registre. Cela permet d'atteindre une fréquence élevée (le chemin critique est réduit à une seule ronde) tout en maintenant un débit d'un bloc par cycle (une fois le pipeline rempli). Cependant, la latence est de 64 cycles pour un bloc individuel, la surface reste 64 fois celle d'une ronde, et la gestion multi-blocs est complexifiée car le pipeline peut contenir des blocs de messages différents.
+
+\paragraph{Architecture itérative} L'approche retenue dans notre projet consiste à instancier une seule copie du circuit de ronde et à la réutiliser 64 fois séquentiellement. Un compteur contrôle l'avancement des rondes, et les registres de travail $a..h$ sont mis à jour à chaque cycle. Cette architecture traite un bloc en exactement 64 cycles de calcul (plus quelques cycles d'overhead pour le chargement et l'écriture). La surface est minimale (une seule ronde), la fréquence est maximale (chemin critique identique au pipeline), et la complexité de contrôle reste gérable.
+
+\paragraph{Justification du choix itératif} Pour un co-processeur embarqué destiné à un SoC sur FPGA de la famille Artix-7 ou Zynq-7000, l'architecture itérative offre le meilleur compromis. Les estimations de ressources sont les suivantes :
+
+\begin{table}[H]
+\centering
+\caption{Comparaison des architectures SHA-256}
+\label{tab:archi_compare}
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Architecture} & \textbf{Surface} & \textbf{Fmax} & \textbf{Débit} & \textbf{Usage typique} \\
+\midrule
+Fully unrolled & $\sim$64$\times$ & $<$30 MHz & 15 Gb/s & ASIC haute perf. \\
+Pipelinée (64 ét.) & $\sim$64$\times$ & $\sim$200 MHz & 100 Gb/s & Mining Bitcoin \\
+\textbf{Itérative (1 ronde/cyc)} & $\mathbf{1\times}$ & $\sim$\textbf{200 MHz} & \textbf{600 Mb/s--1.5 Gb/s} & \textbf{Co-processeur SoC} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notre choix itératif permet d'implémenter le co-processeur complet dans moins de 2000 LUT (sur les 53\,000 disponibles sur un Artix-7 XC7A100T), laissant 96\% du FPGA libre pour le processeur hôte, les périphériques, et d'autres accélérateurs. Le débit de 602 Mbit/s à 100 MHz est largement suffisant pour les applications IoT sécurisé et TLS embarqué.
+
+\subsection{Diagramme de blocs global}
+
+La figure~\ref{fig:block_diagram} présente l'architecture globale du co-processeur. Cinq modules principaux collaborent sous le contrôle d'une machine à états finis centralisée. Le flux de données circule de la mémoire vers le Scheduler (expansion des mots $W_t$), puis vers le module Round (compression), avec les résultats stockés dans les registres de travail et le vecteur de hachage intermédiaire.
 
 \begin{figure}[H]
 \centering
@@ -17,12 +44,12 @@ Architecture \textbf{iterative} : une seule instance du circuit de ronde, reutil
     sig/.style={font=\tiny, midway, fill=white, inner sep=1pt},
     node distance=1.5cm and 2.5cm
 ]
-\node[block, fill=yellow!15] (fsm) {SHA256\_FSM\\{\scriptsize(Controle)}};
+\node[block, fill=yellow!15] (fsm) {SHA256\_FSM\\{\scriptsize(Contrôle)}};
 \node[block, fill=green!15, right=3cm of fsm] (sched) {Scheduler\\{\scriptsize(Expansion $W_t$)}};
 \node[block, fill=red!15, below=2cm of sched] (round) {Round\\{\scriptsize(Compression)}};
 \node[block, fill=blue!15, below=2cm of fsm] (regs) {Registres\\{\scriptsize $a..h$ + $H$}};
-\node[block, fill=gray!15, left=2cm of fsm] (mem) {Memoire\\{\scriptsize 16 Ko}};
-\node[block, fill=orange!10, above=0.8cm of mem] (host) {Hote (CPU)};
+\node[block, fill=gray!15, left=2cm of fsm] (mem) {Mémoire\\{\scriptsize 16 Ko}};
+\node[block, fill=orange!10, above=0.8cm of mem] (host) {Hôte (CPU)};
 
 \draw[arrow] (fsm) -- node[sig, above]{w\_src, shift\_e} (sched);
 \draw[arrow] (sched) -- node[sig, right]{$W_t$} (round);
@@ -38,44 +65,73 @@ Architecture \textbf{iterative} : une seule instance du circuit de ronde, reutil
 \label{fig:block_diagram}
 \end{figure}
 
-\subsection{Description des modules}
+\subsection{Description détaillée des modules}
+
+Le tableau~\ref{tab:modules} résume les six modules VHDL qui composent le co-processeur. Chaque module a une responsabilité unique et clairement délimitée, conformément au principe de séparation des préoccupations qui facilite la vérification individuelle et la réutilisation.
 
 \begin{table}[H]
 \centering
-\caption{Modules VHDL}
+\caption{Modules VHDL du co-processeur}
 \label{tab:modules}
 \begin{tabular}{lp{9cm}}
 \toprule
-\textbf{Module} & \textbf{Role} \\
+\textbf{Module} & \textbf{Rôle et caractéristiques} \\
 \midrule
-\texttt{SHA256\_pkg} & Types, constantes $K_t$/$H_{init}$, fonctions logiques. \\
-\texttt{Round} & Circuit combinatoire d'une ronde. \\
-\texttt{Scheduler} & Fenetre glissante 16 mots + recurrence. \\
-\texttt{SHA256\_FSM} & FSM multi-blocs + pipeline adresses. \\
-\texttt{SHA256\_Core} & Top-level : instancie tout + registres. \\
-\texttt{SHA256\_Memory} & RAM synchrone, latence 1 cycle. \\
+\texttt{SHA256\_pkg} & Package contenant les types (\texttt{word}, \texttt{word\_8}, \texttt{word\_16}, \texttt{word\_64}), les 64 constantes $K_t$, le vecteur $H_{init}$, et les fonctions combinatoires (ROTR, SHR, Ch, Maj, $\sigma_0$, $\sigma_1$, $\Sigma_0$, $\Sigma_1$, add). \\
+\texttt{Round} & Circuit purement combinatoire implémentant une ronde de compression SHA-256. Calcule $T_1$, $T_2$, et les huit nouvelles valeurs $a'..h'$ à partir des entrées courantes et de $K_t + W_t$. \\
+\texttt{Scheduler} & Fenêtre glissante de 16 registres implémentant l'expansion des mots. Accepte un mot externe (mode chargement) ou calcule le prochain mot par récurrence (mode expansion). \\
+\texttt{SHA256\_FSM} & Machine à états finis orchestrant l'ensemble du traitement multi-blocs. Gère le pipeline d'adresses mémoire, le séquencement des opérations, et la sélection des constantes $K_t$. \\
+\texttt{SHA256\_Core} & Module top-level instanciant les trois sous-modules et contenant les registres de travail $a..h$ et le vecteur de hachage $H_{result}$. Implémente la logique d'initialisation et d'accumulation. \\
+\texttt{SHA256\_Memory} & RAM synchrone de 4096 mots (16 Ko) avec interface de lecture (latence 1 cycle) et d'écriture. Sert de tampon entre le processeur hôte et le co-processeur. \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Carte memoire}
+Le module \texttt{Round} est purement combinatoire : il n'a aucune horloge en entrée et ses sorties sont des fonctions booléennes instantanées de ses entrées. Cela signifie que le chemin critique du design traverse entièrement ce module, depuis les registres $a..h$ en entrée jusqu'aux registres $a'..h'$ en sortie. Le chemin le plus long passe par le calcul de $T_1$ (cinq additions de 32 bits en cascade) et détermine la fréquence maximale du design.
+
+Le module \texttt{Scheduler} fonctionne comme un registre à décalage de 16 positions avec une entrée sélectionnable : soit le mot provenant de la mémoire (pendant les 16 premiers cycles de chargement), soit le mot calculé par la récurrence d'expansion (pendant les 48 cycles suivants). La sortie est toujours le mot en position 15 de la fenêtre, qui correspond au $W_t$ courant.
+
+\subsection{Interface mémoire et carte d'adresses}
+
+La communication entre le processeur hôte et le co-processeur s'effectue via une mémoire partagée de 16 Ko (4096 mots de 32 bits). Cette mémoire est synchrone avec une latence de lecture d'exactement un cycle d'horloge : l'adresse présentée sur le bus avant un front montant détermine la donnée disponible en sortie après ce front.
 
 \begin{table}[H]
 \centering
-\caption{Organisation memoire}
+\caption{Organisation mémoire du co-processeur}
 \label{tab:memmap}
 \begin{tabular}{lll}
 \toprule
 \textbf{Adresse} & \textbf{Taille} & \textbf{Contenu} \\
 \midrule
-\texttt{0x0000} & 1 mot & Nombre de blocs $N$ \\
-\texttt{0x0004}+$b{\times}64$+$w{\times}4$ & $N{\times}16$ mots & Blocs pre-paddes \\
-\texttt{0x2000}--\texttt{0x201C} & 8 mots & Condense $H_0..H_7$ \\
+\texttt{0x0000} & 1 mot & Nombre de blocs $N$ (bits 7..0 utilisés) \\
+\texttt{0x0004}+$b{\times}64$+$w{\times}4$ & $N{\times}16$ mots & Blocs pré-paddés ($W_0..W_{15}$ par bloc) \\
+\texttt{0x2000}--\texttt{0x201C} & 8 mots & Condensé final $H_0..H_7$ (résultat) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{FSM multi-blocs}
+Le protocole d'utilisation est simple et efficace. Le processeur hôte écrit d'abord le nombre de blocs $N$ à l'adresse \texttt{0x0000}, puis les $N \times 16$ mots du message pré-paddé en séquence à partir de l'adresse \texttt{0x0004}. Il pulse ensuite le signal \texttt{start} pendant un cycle. Le co-processeur traite alors autonomement tous les blocs et écrit le condensé final aux adresses \texttt{0x2000} à \texttt{0x201C}. Le signal \texttt{done} (actif en état IDLE) indique que le résultat est disponible.
+
+Le choix d'un espace d'adresses de 16 bits (64 Ko adressable) offre une marge confortable pour les extensions futures (support de messages plus longs, ajout de registres de contrôle/statut pour une interface AXI-Lite, etc.) tout en gardant les compteurs et comparateurs d'adresses compacts.
+
+\subsection{Le problème du pipeline d'adresses et sa solution}
+
+La latence d'un cycle de la mémoire synchrone crée un défi de conception subtil mais critique : l'adresse doit être présentée \emph{un cycle avant} que la donnée ne soit nécessaire. Cette contrainte temporelle signifie que la FSM doit anticiper ses besoins en données et émettre les adresses de manière proactive.
+
+Concrètement, lorsque la FSM entre en état LOAD (chargement des 16 mots du bloc courant dans le Scheduler), elle doit présenter l'adresse de $W_0$ \emph{avant} d'entrer réellement en LOAD. La solution adoptée est la suivante :
+
+\begin{itemize}
+    \item En état IDLE, l'adresse \texttt{0x0000} est maintenue en permanence sur le bus, ce qui pré-charge la valeur de \texttt{num\_blocks} dans le pipeline de lecture ;
+    \item Lors de la transition IDLE $\rightarrow$ READ\_NBLK (sur \texttt{start}), la FSM positionne immédiatement l'adresse de $W_0$ du premier bloc (\texttt{0x0004}) ;
+    \item En READ\_NBLK, la donnée \texttt{num\_blocks} est capturée (elle était déjà en transit), et l'adresse de $W_1$ est émise ;
+    \item En LOAD, chaque cycle capture $W_{counter}$ et émet l'adresse de $W_{counter+2}$ (anticipation d'un cycle).
+\end{itemize}
+
+Cette stratégie d'adressage anticipé (lookahead) garantit un flux continu de données sans bulle dans le pipeline, maximisant l'utilisation de la bande passante mémoire.
+
+\subsection{Machine à états finis multi-blocs}
+
+La FSM du co-processeur comporte sept états, représentés dans la figure~\ref{fig:fsm_diagram}. La boucle rouge illustre le mécanisme de traitement multi-blocs : après l'accumulation des résultats d'un bloc, la FSM vérifie s'il reste des blocs à traiter et, le cas échéant, reboucle vers le chargement du bloc suivant.
 
 \begin{figure}[H]
 \centering
@@ -103,8 +159,51 @@ Architecture \textbf{iterative} : une seule instance du circuit de ronde, reutil
 \draw[arrow, red!70!black, dashed, thick] (accum.north) |- node[tr,above,pos=0.6,text=red!70!black]{next blk} (pref.west);
 \draw[arrow, red!70!black, dashed, thick] (pref.south) |- (load.east);
 \end{tikzpicture}
-\caption{FSM multi-blocs (boucle en rouge)}
+\caption{FSM multi-blocs (boucle en rouge pour les blocs supplémentaires)}
 \label{fig:fsm_diagram}
 \end{figure}
 
-\textbf{Protocole} : le hote ecrit num\_blocks a 0x0000 + les blocs pre-paddes a partir de 0x0004, puis pulse \texttt{start}. Le co-processeur traite tous les blocs et ecrit le condense a 0x2000. Le signal \texttt{done} indique la fin.
+\paragraph{État IDLE (repos)} Le co-processeur est au repos, le signal \texttt{done} est actif (haut), et l'adresse \texttt{0x0000} est maintenue en permanence sur le bus mémoire. Cela signifie que la valeur de \texttt{num\_blocks} est constamment disponible à la sortie de la mémoire, prête à être capturée dès le début d'une opération. La transition vers READ\_NBLK s'effectue sur front montant de \texttt{start}.
+
+\paragraph{État READ\_NBLK (lecture du nombre de blocs)} Cet état dure exactement un cycle. La FSM capture la valeur de \texttt{num\_blocks} depuis la sortie mémoire (disponible car l'adresse \texttt{0x0000} était maintenue en IDLE), initialise le compteur de blocs à zéro, émet le signal \texttt{block\_init} (qui force $H_{result} = H_{init}$ dans le Core), et positionne l'adresse de $W_1$ du premier bloc. Le signal \texttt{hash\_init} est actif combinatoirement pendant cet état, copiant $H_{result}$ vers les registres de travail $a..h$.
+
+\paragraph{État PREFETCH (pré-chargement)} Utilisé uniquement pour les blocs 1, 2, etc. (pas le premier). L'état ACCUM précédent a déjà positionné l'adresse de $W_0$ du nouveau bloc. PREFETCH positionne l'adresse de $W_1$ et active \texttt{hash\_init} pour copier le vecteur $H_{result}$ mis à jour vers les registres de travail. Cet état consomme le cycle de latence mémoire nécessaire entre ACCUM et LOAD.
+
+\paragraph{État LOAD (chargement)} Pendant 16 cycles (compteur de 0 à 15), la FSM alimente le Scheduler avec les mots $W_0$ à $W_{15}$ lus séquentiellement depuis la mémoire. À chaque cycle, le mot $W_{counter}$ est capturé par le Scheduler (via \texttt{sched\_input}), le signal \texttt{shift\_e} est actif pour décaler la fenêtre, et l'adresse de $W_{counter+2}$ est émise (anticipation). Le signal \texttt{w\_src = '0'} indique au Scheduler d'utiliser l'entrée externe plutôt que la récurrence interne. Notons que \texttt{round\_en} est actif dès le cycle 1 (pas le cycle 0), car le Scheduler nécessite un cycle pour placer le premier mot en position de sortie.
+
+\paragraph{État COMPUTE (calcul)} Le coeur du traitement : 48 cycles supplémentaires (compteur de 16 à 63) pendant lesquels le Scheduler génère les mots $W_{16}$ à $W_{63}$ par récurrence interne (\texttt{w\_src = '1'}), et le module Round calcule une ronde de compression par cycle. La constante $K_t$ est sélectionnée par le compteur via un multiplexeur câblé sur le tableau de constantes. Lorsque le compteur atteint 64, le signal \texttt{compute\_done} est pulsé.
+
+\paragraph{État ACCUM (accumulation)} Dure un cycle. Le signal \texttt{compute\_done} du cycle précédent a déclenché l'accumulation $H_{result}(j) += var_j$ dans le Core. La FSM vérifie si $block\_idx + 1 < num\_blocks$ : si oui, elle incrémente le compteur de blocs, positionne l'adresse de $W_0$ du bloc suivant, et transite vers PREFETCH ; sinon, elle transite vers WRITEBACK.
+
+\paragraph{État WRITEBACK (écriture du résultat)} Pendant 8 cycles, la FSM écrit séquentiellement les huit mots du condensé $H_0..H_7$ aux adresses \texttt{0x2000} à \texttt{0x201C} via le port d'écriture mémoire (\texttt{mem\_wen = '1'}). Le compteur \texttt{wb\_cnt} de 0 à 7 sélectionne à la fois l'adresse de destination et le mot source dans $H_{result}$.
+
+\subsection{Timing détaillé pour un bloc}
+
+Pour un message d'un seul bloc (le cas le plus fréquent pour les hachages courts), le timing complet est le suivant :
+
+\begin{enumerate}
+    \item IDLE $\rightarrow$ READ\_NBLK : 1 cycle (capture num\_blocks, init)
+    \item READ\_NBLK $\rightarrow$ LOAD : transition immédiate
+    \item LOAD : 16 cycles (chargement $W_0..W_{15}$, rondes 0--14 déjà en cours)
+    \item COMPUTE : 49 cycles (rondes 15--63, dont 1 cycle de transition à counter=64)
+    \item ACCUM : 1 cycle (accumulation $H += a..h$)
+    \item WRITEBACK : 8 cycles (écriture $H_0..H_7$)
+\end{enumerate}
+
+Le total est de $1 + 16 + 49 + 1 + 8 = 75$ cycles pour le calcul effectif, plus quelques cycles d'overhead pour les transitions, donnant environ 85 cycles mesurés en simulation (section~\ref{sec:verif}). Pour les blocs supplémentaires, le coût marginal est réduit car l'état READ\_NBLK et le WRITEBACK ne sont exécutés qu'une fois : chaque bloc additionnel ne coûte que $1 + 16 + 49 + 1 = 67$ cycles.
+
+\subsection{Protocole d'utilisation par le processeur hôte}
+
+Du point de vue du logiciel s'exécutant sur le processeur hôte, l'utilisation du co-processeur se résume à une séquence simple d'accès mémoire :
+
+\begin{enumerate}
+    \item Le logiciel applique le padding au message et le découpe en blocs de 512 bits ;
+    \item Il écrit le nombre de blocs $N$ à l'adresse \texttt{0x0000} ;
+    \item Il écrit les $N \times 16$ mots à partir de \texttt{0x0004} ;
+    \item Il pulse le signal \texttt{start} (écriture dans un registre de contrôle) ;
+    \item Il attend le signal \texttt{done} (polling ou interruption) ;
+    \item Il lit les 8 mots du condensé à \texttt{0x2000}--\texttt{0x201C}.
+\end{enumerate}
+
+Cette interface mémoire simple (memory-mapped) permet une intégration directe dans un SoC avec un bus AXI-Lite ou Wishbone, sans nécessiter de protocole de handshake complexe.
+

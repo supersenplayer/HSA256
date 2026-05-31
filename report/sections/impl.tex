@@ -1,9 +1,21 @@
-\section{Implementation VHDL}
+\section{Implémentation VHDL}
 \label{sec:impl}
 
-\subsection{Fonctions logiques (SHA256\_pkg)}
+\subsection{Choix du style de codage}
 
-\begin{lstlisting}[caption={Fonctions de rotation -- cout ZERO en hardware},label={lst:pkg}]
+L'implémentation a été réalisée en VHDL-93, un choix motivé par plusieurs considérations pratiques. VHDL offre un typage fort qui détecte à la compilation de nombreuses erreurs qui passeraient inaperçues en Verilog (par exemple, la connexion accidentelle de signaux de largeurs différentes). Le standard 93 est universellement supporté par les outils de synthèse (Vivado, Quartus, Synopsys Design Compiler) et les simulateurs (ModelSim, XSim, GHDL), garantissant la portabilité du design.
+
+Le style de codage adopté suit les recommandations de synthèse de Xilinx : les processus séquentiels utilisent un reset synchrone implicite (le signal \texttt{rst} est testé à l'intérieur du bloc \texttt{rising\_edge(clk)}), les sorties combinatoires sont assignées par des instructions concurrentes hors processus, et tous les signaux sont explicitement typés via le package \texttt{ieee.numeric\_std}. L'utilisation de \texttt{std\_logic\_vector} pour les mots de 32 bits et de \texttt{unsigned} pour les opérations arithmétiques permet un contrôle précis du comportement en cas de métavaleurs ('X', 'U') lors de la simulation.
+
+Un package centralisé (\texttt{SHA256\_pkg}) regroupe toutes les définitions de types, constantes, et fonctions communes, évitant la duplication de code et facilitant les modifications globales. Ce package définit notamment le sous-type \texttt{word} (synonyme de \texttt{std\_logic\_vector(31 downto 0)}) et les types tableaux \texttt{word\_8}, \texttt{word\_16}, \texttt{word\_64} utilisés pour les vecteurs de hachage, les fenêtres de mots, et les tableaux de constantes respectivement.
+
+\subsection{Package SHA256\_pkg : fonctions à coût nul}
+
+Le package contient les implémentations des six fonctions logiques de SHA-256. Un aspect fondamental de ces fonctions est que les rotations et décalages ne consomment \textbf{aucune ressource matérielle} : en FPGA, une rotation de $n$ positions correspond simplement à un réarrangement des fils de connexion entre les bascules, sans passer par aucune porte logique. Ce « coût zéro » est l'un des avantages majeurs de l'implémentation matérielle par rapport au logiciel.
+
+Le listing~\ref{lst:pkg} illustre cette propriété avec les fonctions \texttt{ROTR} et \texttt{small\_sigma0}. La fonction \texttt{ROTR} est un simple réarrangement de la concaténation des bits. La fonction \texttt{small\_sigma0} combine trois réarrangements via des XOR, ce qui se traduit en matériel par une seule couche de portes XOR à trois entrées --- soit un délai de propagation inférieur à 1 ns sur un FPGA Artix-7.
+
+\begin{lstlisting}[caption={Fonctions de rotation et mélange -- coût matériel quasi-nul},label={lst:pkg}]
 function ROTR (x : in word; n : in integer) return word is
 begin
     return x(n-1 downto 0) & x(31 downto n);
@@ -15,7 +27,17 @@ begin
 end function small_sigma0;
 \end{lstlisting}
 
-\subsection{Module Round}
+La fonction \texttt{SHR} (shift right) diffère de \texttt{ROTR} en ce qu'elle remplace les bits de poids fort par des zéros plutôt que par les bits sortants. En matériel, cela se traduit par des connexions câblées à '0' pour les $n$ bits de poids fort, ce qui est également gratuit en termes de ressources.
+
+Les fonctions \texttt{Ch} et \texttt{Maj} utilisent uniquement des opérations AND, OR, XOR et NOT, qui correspondent chacune à une LUT 6-entrées en FPGA Xilinx série 7. Une LUT peut implémenter n'importe quelle fonction booléenne de 6 variables en un seul niveau logique, ce qui signifie que \texttt{Ch} et \texttt{Maj} pour un bit donné tiennent chacune dans une seule LUT avec un délai de propagation d'environ 0.5 ns.
+
+La fonction \texttt{add} effectue une addition modulaire sur 32 bits en utilisant la conversion vers \texttt{unsigned}, l'opérateur '+', et la reconversion en \texttt{std\_logic\_vector}. L'outil de synthèse infère automatiquement une chaîne de propagation de retenue (carry chain) dédiée du FPGA, qui est optimisée pour les additions rapides (environ 2.5 ns pour 32 bits sur Artix-7 grâce aux ressources CARRY4 dédiées).
+
+\subsection{Module Round : le chemin critique}
+
+Le module Round implémente la logique combinatoire d'une ronde de compression SHA-256. C'est un bloc purement combinatoire (sans horloge) qui constitue le chemin critique du design et détermine directement la fréquence maximale atteignable.
+
+La figure~\ref{fig:round_datapath} illustre le chemin de données avec le chemin critique en rouge. Le signal $T_1$ nécessite une chaîne de cinq additions de 32 bits ($h + \Sigma_1(e) + Ch(e,f,g) + K_t + W_t$), chacune prenant environ 2.5 ns sur un FPGA série 7. Le chemin critique total est donc d'environ $5 \times 2.5 = 12.5$ ns théoriques, soit une Fmax de 80 MHz sans optimisation. En pratique, l'outil de synthèse fusionne certaines additions (carry-save) et optimise le placement, permettant d'atteindre 150--200 MHz.
 
 \begin{figure}[H]
 \centering
@@ -60,11 +82,13 @@ end function small_sigma0;
 
 \node[font=\tiny,red] at (4,-1.5) {$T_1$ (chemin critique)};
 \end{tikzpicture}
-\caption{Chemin de donnees d'une ronde (critique en rouge)}
+\caption{Chemin de données d'une ronde SHA-256 (chemin critique en rouge)}
 \label{fig:round_datapath}
 \end{figure}
 
-\begin{lstlisting}[caption={Round.vhd -- compression},label={lst:round}]
+Le listing~\ref{lst:round} montre l'implémentation VHDL correspondante. La concision du code (quatre lignes pour le calcul complet) démontre l'adéquation entre la description algorithmique et l'implémentation matérielle en VHDL. Chaque ligne se traduit directement en un arbre d'additionneurs et de fonctions logiques que l'outil de synthèse mappe sur les ressources du FPGA.
+
+\begin{lstlisting}[caption={Round.vhd -- calcul combinatoire d'une ronde complète},label={lst:round}]
 t1 <= std_logic_vector( unsigned(h) + unsigned(big_sigma1(e))
      + unsigned(ch(e,f,g)) + unsigned(kt) + unsigned(wt) );
 t2 <= std_logic_vector( unsigned(big_sigma0(a))
@@ -73,9 +97,17 @@ n_e <= std_logic_vector(unsigned(d) + unsigned(t1));
 n_a <= std_logic_vector(unsigned(t1) + unsigned(t2));
 \end{lstlisting}
 
-\subsection{Scheduler}
+Les assignations des autres registres ($n\_b \leftarrow a$, $n\_c \leftarrow b$, etc.) sont de simples connexions directes sans logique, car le décalage des variables de travail est un réarrangement pur. Ces connexions ne contribuent ni au chemin critique ni à la consommation de ressources.
 
-\begin{lstlisting}[caption={Scheduler -- fenetre glissante},label={lst:sched}]
+Notons que les largeurs de tous les signaux sont fixées à 32 bits. L'addition est naturellement modulaire sur 32 bits grâce au comportement d'overflow implicite du type \texttt{unsigned} : tout dépassement est simplement tronqué (les bits de retenue au-delà du bit 31 sont ignorés), ce qui correspond exactement à l'arithmétique modulo $2^{32}$ exigée par la norme.
+
+\subsection{Module Scheduler : la fenêtre glissante}
+
+Le Scheduler implémente l'expansion des mots $W_t$ à l'aide d'une structure matérielle appelée « fenêtre glissante » (sliding window). Cette structure consiste en un tableau de 16 registres de 32 bits (type \texttt{word\_16}) qui maintient en permanence les 16 derniers mots nécessaires au calcul de la récurrence d'expansion (équation~\ref{eq:expansion}).
+
+Le fonctionnement est le suivant : à chaque cycle d'horloge où le signal \texttt{shift\_e} est actif, les 15 registres inférieurs (positions 0 à 14) sont décalés d'une position vers la gauche (position $i$ reçoit la valeur de la position $i+1$), et un nouveau mot est inséré en position 15. Ce nouveau mot provient soit de la mémoire (si \texttt{w\_src = '0'}, pendant le chargement), soit du calcul de récurrence (si \texttt{w\_src = '1'}, pendant l'expansion).
+
+\begin{lstlisting}[caption={Scheduler.vhd -- expansion par fenêtre glissante},label={lst:sched}]
 new_w <= std_logic_vector( unsigned(small_sigma1(w_window(14)))
   + unsigned(w_window(9)) + unsigned(small_sigma0(w_window(1)))
   + unsigned(w_window(0)));
@@ -83,9 +115,17 @@ output <= w_window(15);
 -- On rising_edge: shift left, insert new word at position 15
 \end{lstlisting}
 
-\subsection{FSM multi-blocs}
+La sortie du Scheduler est toujours \texttt{w\_window(15)}, qui correspond au mot $W_t$ actuellement nécessaire pour la ronde de compression en cours. L'indexation dans le tableau est conçue pour que les quatre mots nécessaires à la récurrence ($W_{t-2}$, $W_{t-7}$, $W_{t-15}$, $W_{t-16}$) correspondent aux positions fixes 14, 9, 1, et 0 de la fenêtre à tout instant, indépendamment de la valeur de $t$. Cette correspondance fixe élimine toute nécessité de multiplexeur indexé par le compteur de rondes, simplifiant considérablement le routage.
 
-\begin{lstlisting}[caption={FSM -- boucle entre blocs},label={lst:fsm}]
+Le choix de 16 registres (plutôt que les 64 qui seraient nécessaires pour stocker tous les $W_t$) représente une économie de 75\% des bascules, au prix d'un calcul de récurrence en ligne. Ce compromis est particulièrement avantageux en FPGA où les bascules sont une ressource limitée mais les LUT (utilisées pour le calcul combinatoire de \texttt{new\_w}) sont abondantes.
+
+\subsection{Module FSM : orchestration multi-blocs}
+
+La machine à états finis est le composant le plus complexe en termes de logique de contrôle. Elle coordonne l'ensemble du traitement en gérant sept états, un compteur principal (0 à 64), un compteur de writeback (0 à 7), un registre d'adresse (16 bits), le compteur de blocs, et plusieurs signaux de contrôle pulsés.
+
+Le listing~\ref{lst:fsm} illustre la logique de transition dans l'état ACCUM, qui est le point de décision pour le traitement multi-blocs. Cette logique compare le compteur de blocs courant au nombre total de blocs et décide de continuer (transition vers PREFETCH) ou de terminer (transition vers WRITEBACK).
+
+\begin{lstlisting}[caption={FSM -- logique de branchement multi-blocs dans l'état ACCUM},label={lst:fsm}]
 when ACCUM =>
     if block_idx + 1 < num_blocks then
         block_idx <= block_idx + 1;
@@ -96,9 +136,15 @@ when ACCUM =>
     end if;
 \end{lstlisting}
 
-\subsection{Core -- accumulation}
+Un aspect subtil de l'implémentation est la gestion du signal \texttt{counter\_prev}. La constante $K_t$ doit être alignée temporellement avec le mot $W_t$ sortant du Scheduler. Or, le Scheduler introduit un cycle de latence entre l'insertion d'un mot et sa disponibilité en sortie. Pour compenser, le signal \texttt{kt} utilise \texttt{counter\_prev} (la valeur du compteur au cycle précédent) comme index dans le tableau de constantes, ce qui réaligne $K_t$ avec le $W_t$ correspondant.
 
-\begin{lstlisting}[caption={Core -- registres et accumulation},label={lst:core}]
+La FSM génère également combinatoirement le signal \texttt{hash\_init} (actif pendant READ\_NBLK et PREFETCH) qui déclenche la copie du vecteur $H_{result}$ vers les registres de travail $a..h$ avant le début du traitement de chaque bloc. Cette architecture « copy-compute-accumulate » est essentielle pour le support multi-blocs : les registres de travail sont initialisés avec l'état intermédiaire courant, modifiés pendant 64 rondes, puis leurs valeurs finales sont accumulées dans $H_{result}$.
+
+\subsection{Module Core : registres et accumulation}
+
+Le module top-level \texttt{SHA256\_Core} instancie les trois sous-modules (Scheduler, Round, FSM) et contient la logique séquentielle des registres de travail $a..h$ et du vecteur de hachage intermédiaire $H_{result}$. Le listing~\ref{lst:core} montre la structure du processus principal, organisé en quatre cas mutuellement exclusifs dans un ordre de priorité décroissante.
+
+\begin{lstlisting}[caption={SHA256\_Core -- registres de travail et accumulation},label={lst:core}]
 if block_init = '1' then  H_result <= H_init;  end if;
 if hash_init = '1' then   ra <= H_result(0); ...  end if;
 if round_en = '1' then    ra <= n_a; rb <= n_b; ...  end if;
@@ -106,3 +152,16 @@ if compute_done = '1' then
     H_result(0) <= add(H_result(0), ra); ...  -- accumulate
 end if;
 \end{lstlisting}
+
+Le signal \texttt{block\_init} n'est pulsé qu'une seule fois (au tout début, en READ\_NBLK du premier bloc) et force $H_{result} = H_{init}$. Le signal \texttt{hash\_init} est pulsé au début de chaque bloc et copie le vecteur courant dans les registres de travail. Le signal \texttt{round\_en} est actif pendant les 64 cycles de calcul effectif et met à jour les registres avec les sorties du module Round. Enfin, \texttt{compute\_done} est pulsé à la fin des 64 rondes et déclenche l'accumulation additive.
+
+Cette structure à quatre niveaux de priorité garantit un fonctionnement correct même en cas de chevauchement temporel des signaux de contrôle, car les conditions sont évaluées séquentiellement dans le processus VHDL et la dernière assignation prévaut.
+
+\subsection{Module Memory : RAM synchrone}
+
+La mémoire est implémentée comme un tableau de 4096 mots de 32 bits (16 Ko) avec un port de lecture et un port d'écriture, tous deux synchrones sur le front montant de l'horloge. La latence de lecture est d'exactement un cycle : l'adresse présentée avant un front montant détermine la donnée disponible après ce front.
+
+L'outil de synthèse Vivado infère automatiquement cette structure comme des Block RAM (BRAM) du FPGA, qui sont des mémoires dédiées de 36 Kbit intégrées dans le tissu logique. Un seul bloc BRAM de 36 Kbit peut stocker $36 \times 1024 / 32 = 1152$ mots de 32 bits ; notre mémoire de 4096 mots nécessite donc 4 blocs BRAM, sur les 135 disponibles dans un Artix-7 XC7A100T (soit 3\% d'utilisation).
+
+L'adressage utilise les bits 13 à 2 du bus d'adresse de 16 bits : les bits 1..0 sont ignorés (alignement sur mots de 32 bits = 4 octets), et le bit 13 permet d'adresser 4096 emplacements ($2^{12} = 4096$). Les bits 15..14 ne sont pas décodés dans cette version, mais pourraient servir à différencier des espaces d'adresses supplémentaires dans une version étendue (registres de contrôle, FIFO de statut, etc.).
+

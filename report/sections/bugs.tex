@@ -1,27 +1,89 @@
-\section{Problemes rencontres et corrections}
+\section{Problèmes rencontrés et corrections}
 \label{sec:bugs}
 
-\subsection{Bug \#1 : Decalage lecture memoire}
+\subsection{Introduction}
 
-\textbf{Symptome} : mots $W_i$ decales d'une position.
-\textbf{Cause} : latence RAM non compensee dans le pipeline d'adresses.
-\textbf{Correction} : avancer l'emission de l'adresse $W_0$ d'un cycle (des IDLE).
+Le développement d'un accélérateur matériel cryptographique est un processus itératif où les bugs sont inévitables, particulièrement lorsqu'il s'agit de gérer les subtilités du pipeline mémoire synchrone et du séquencement multi-cycles. Cette section documente les trois principaux problèmes rencontrés durant le développement, en analysant pour chacun le symptôme observable, la cause profonde, la méthodologie de diagnostic, et la correction apportée. Ces bugs sont instructifs car ils illustrent des catégories d'erreurs fréquentes en conception numérique synchrone.
 
-\subsection{Bug \#2 : $H_0$ incorrect}
+\subsection{Bug \#1 : Décalage de lecture mémoire (off-by-one pipeline)}
 
-\textbf{Symptome} : $H_0$ restait a la valeur initiale.
-\textbf{Cause} : accumulation et writeback dans le meme cycle.
-\textbf{Correction} : etat ACCUM separe pour stabilisation.
+\paragraph{Symptôme observable} Lors des premiers tests de simulation, le condensé obtenu pour le vecteur "abc" ne correspondait pas à la référence NIST. L'analyse détaillée des signaux internes a révélé que les mots $W_i$ chargés dans le Scheduler étaient systématiquement décalés d'une position : le mot lu au cycle $n$ correspondait à l'adresse émise au cycle $n-2$ plutôt qu'au cycle $n-1$. Concrètement, le Scheduler recevait la séquence $W_{-1}$ (valeur indéterminée), $W_0$, $W_1$, ..., $W_{14}$ au lieu de $W_0$, $W_1$, ..., $W_{15}$.
 
-\subsection{Bug \#3 : Debordement index $K_t$}
+\paragraph{Cause profonde} La mémoire synchrone (Block RAM) introduit une latence d'exactement un cycle d'horloge entre la présentation de l'adresse et la disponibilité de la donnée en sortie. Dans la version initiale du code, la FSM émettait l'adresse de $W_0$ au moment même où elle entrait en état LOAD, ce qui signifie que la donnée correspondant à $W_0$ n'était disponible qu'au cycle suivant --- un cycle trop tard, car la FSM attendait déjà $W_1$ à ce moment-là.
 
-\textbf{Symptome} : \texttt{index (64) out of bounds}.
-\textbf{Cause} : \texttt{counter\_prev} atteignait 64, $K$ indexe 0..63.
-\textbf{Correction} : garde \texttt{counter\_prev < 64}.
+Ce type de bug est particulièrement insidieux car il ne provoque pas d'erreur de compilation, pas de signal indéterminé ('X') en simulation (la mémoire retourne toujours une valeur valide, même si c'est la mauvaise adresse), et le design semble fonctionner normalement à l'observation superficielle des chronogrammes. Seule la comparaison mot à mot avec la référence révèle le problème.
 
-\subsection{Lecons}
+\paragraph{Diagnostic} Le diagnostic a été effectué en ajoutant le signal \texttt{mem\_data} à la fenêtre de visualisation du chronogramme et en comparant la séquence de valeurs observées avec la séquence attendue des mots du message "abc". La première valeur capturée par le Scheduler (\texttt{0x00000000}) ne correspondait pas au premier mot attendu (\texttt{0x61626380}), confirmant le décalage temporel d'un cycle.
+
+\paragraph{Correction} La solution consiste à anticiper l'émission de l'adresse d'un cycle supplémentaire. Concrètement :
+
+\begin{itemize}
+    \item En état IDLE, l'adresse \texttt{0x0000} est maintenue en permanence, ce qui pré-charge \texttt{num\_blocks} dans le pipeline de lecture ;
+    \item Lors de la transition IDLE $\rightarrow$ READ\_NBLK (sur \texttt{start}), l'adresse de $W_0$ (\texttt{0x0004}) est immédiatement positionnée, un cycle avant que la donnée ne soit nécessaire ;
+    \item En READ\_NBLK, l'adresse de $W_1$ (\texttt{0x0008}) est émise ;
+    \item En LOAD, à chaque cycle, on capture le mot courant et on émet l'adresse du mot $counter + 2$ positions plus loin.
+\end{itemize}
+
+Cette stratégie de « lookahead » compense exactement la latence mémoire et garantit un flux continu de données sans bulle. L'invariant à respecter est : l'adresse présente sur le bus au cycle $n$ doit correspondre au mot nécessaire au cycle $n+1$.
+
+\paragraph{Vérification de la correction} Après modification, le chronogramme montre que le premier mot reçu par le Scheduler en LOAD cycle 0 est bien \texttt{0x61626380} (premier mot de "abc"), et les 15 mots suivants arrivent dans l'ordre correct. Le condensé final correspond désormais à la référence NIST.
+
+\subsection{Bug \#2 : $H_0$ incorrect après accumulation}
+
+\paragraph{Symptôme observable} Après correction du bug \#1, le condensé pour le vecteur multi-blocs (56 octets, 2 blocs) donnait un $H_0$ incorrect tandis que les mots $H_1$ à $H_7$ étaient corrects. Plus précisément, $H_0$ conservait la valeur intermédiaire après le premier bloc, comme si l'accumulation du second bloc n'avait pas eu lieu pour ce registre spécifique.
+
+\paragraph{Cause profonde} Dans la version initiale, l'accumulation ($H_{result}(j) += var_j$) et le writeback ($H_{result}(j) \rightarrow$ mémoire) étaient tentés dans le même cycle d'horloge. En VHDL, lorsque deux assignations au même signal se produisent dans le même processus et le même cycle, seule la dernière prévaut. Pour $H_0$, le writeback (qui lit $H_{result}(0)$ pour l'écrire en mémoire) se produisait au même moment que l'accumulation, créant un conflit de lecture/écriture. La valeur accumulée n'était pas stabilisée avant d'être lue pour le writeback.
+
+La raison pour laquelle seul $H_0$ était affecté (et pas $H_1..H_7$) était liée à un détail de timing : le compteur de writeback commençait à 0 (pour $H_0$) au même cycle que le signal \texttt{compute\_done}, créant un chevauchement uniquement pour le premier mot.
+
+\paragraph{Diagnostic} Le diagnostic a été effectué en observant la valeur de \texttt{H\_result(0)} cycle par cycle autour de la transition COMPUTE $\rightarrow$ ACCUM $\rightarrow$ WRITEBACK. On a constaté que la valeur accumulée (correcte) apparaissait pendant un cycle puis était écrasée, indiquant un conflit temporel.
+
+\paragraph{Correction} La solution consiste à séparer explicitement les phases d'accumulation et de writeback par un état dédié. L'état ACCUM a été introduit comme un état d'un cycle entre la fin du COMPUTE et le début du WRITEBACK. Pendant cet état unique :
 
 \begin{enumerate}
-    \item Pipeline d'adresses memoire synchrone : toujours verifier cycle par cycle ;
-    \item Conditions aux limites (premier/dernier cycle) : tester exhaustivement.
+    \item Le signal \texttt{compute\_done} déclenche l'accumulation dans le Core ($H_{result} += a..h$) ;
+    \item La FSM vérifie s'il reste des blocs à traiter ;
+    \item Le writeback ne commence qu'au cycle suivant, une fois la valeur accumulée stabilisée dans les registres.
 \end{enumerate}
+
+Cette séparation temporelle garantit que la valeur lue par le writeback est la valeur finale correcte, car elle a eu un cycle complet pour se propager à travers la logique d'addition et être capturée dans le registre.
+
+\paragraph{Leçon apprise} En conception synchrone, il ne faut jamais lire la sortie d'un registre au même cycle où on l'écrit (violation du principe read-after-write). L'insertion d'un cycle de « settling » entre l'écriture et la lecture est la solution standard pour éviter les conditions de course.
+
+\subsection{Bug \#3 : Débordement de l'index $K_t$}
+
+\paragraph{Symptôme observable} En simulation, le testbench se terminait par une erreur fatale : \texttt{"index (64) out of bounds"} lors de l'accès au tableau \texttt{K\_cons}. Ce tableau est déclaré comme \texttt{word\_64} (indices 0 à 63), mais un accès à l'index 64 était tenté.
+
+\paragraph{Cause profonde} Le signal \texttt{counter\_prev} est utilisé pour indexer le tableau de constantes $K_t$ (afin de compenser le décalage temporel avec le Scheduler). Or, à la fin de la phase COMPUTE, le compteur principal atteint 64 (condition de sortie de boucle), et \texttt{counter\_prev} (qui est la valeur retardée d'un cycle) atteint également 64 au cycle suivant. L'expression \texttt{K\_cons(counter\_prev)} avec \texttt{counter\_prev = 64} provoque un accès hors limites du tableau.
+
+Ce bug ne se manifeste qu'en simulation (où les vérifications de bornes sont actives) et non en synthèse (où les bits de poids fort de l'index seraient simplement tronqués, produisant un accès à une adresse « enveloppée » --- un comportement silencieusement incorrect plutôt qu'une erreur détectée).
+
+\paragraph{Diagnostic} Le message d'erreur de GHDL/XSim indiquait clairement la ligne fautive et la valeur de l'index. La trace temporelle a confirmé que l'erreur se produit exactement au cycle où la FSM transite de COMPUTE vers ACCUM (le compteur passe à 64, et \texttt{counter\_prev} prend cette valeur au cycle suivant).
+
+\paragraph{Correction} L'ajout d'une garde conditionnelle sur l'accès au tableau élimine le débordement :
+
+\begin{verbatim}
+    kt <= K_cons(counter_prev)
+          when ((state = LOAD or state = COMPUTE)
+                and counter_prev < 64)
+          else (others => '0');
+\end{verbatim}
+
+Cette garde assure que l'index n'est utilisé pour accéder au tableau que lorsqu'il est dans la plage valide [0, 63]. En dehors de cette plage (c'est-à-dire pendant les cycles de transition ou quand le calcul est terminé), $K_t$ est forcé à zéro, ce qui est inoffensif puisque le signal \texttt{round\_en} est inactif à ces moments et la valeur de $K_t$ n'est pas utilisée.
+
+\paragraph{Leçon apprise} En VHDL, les accès aux tableaux à indices entiers ne sont pas automatiquement bornés. Contrairement aux langages logiciels comme Rust ou Ada qui vérifient les bornes à l'exécution, le VHDL synthétisable traduit un accès hors bornes en un comportement matériel indéfini (bits de poids fort ignorés). Il est essentiel de protéger tous les accès aux tableaux par des gardes explicites, même si le cas « impossible » semble ne jamais devoir se produire en fonctionnement normal.
+
+\subsection{Synthèse des leçons apprises}
+
+Les trois bugs documentés ci-dessus illustrent trois catégories fondamentales d'erreurs en conception numérique synchrone :
+
+\begin{enumerate}
+    \item \textbf{Bugs de pipeline (off-by-one temporel)} : les mémoires synchrones, les registres de pipeline, et les FIFO introduisent des latences qui doivent être soigneusement compensées dans le contrôle. La méthode de prévention consiste à tracer cycle par cycle le chemin de chaque donnée depuis sa source jusqu'à sa destination, en marquant les étages de registres traversés.
+
+    \item \textbf{Bugs de conflits read-after-write} : lorsqu'un signal est lu et écrit dans le même cycle, la valeur lue est celle d'avant l'écriture (comportement registre synchrone). La prévention consiste à toujours insérer au moins un cycle entre l'écriture d'un registre et la lecture de sa nouvelle valeur par un autre module.
+
+    \item \textbf{Bugs de conditions aux limites} : les compteurs qui atteignent leur valeur maximale (premier cycle, dernier cycle, zéro, valeur limite) sont des sources prolifiques de bugs. La prévention consiste à tester exhaustivement ces cas limites en simulation et à protéger les accès aux tableaux par des gardes explicites.
+\end{enumerate}
+
+Ces catégories de bugs sont universelles en conception RTL et se retrouvent dans tous les projets de circuits numériques, des plus simples aux plus complexes. La discipline de tracer les signaux cycle par cycle sur papier avant de coder, puis de vérifier systématiquement les cas limites en simulation, est la meilleure défense contre ces erreurs.
+
